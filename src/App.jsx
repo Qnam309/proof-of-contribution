@@ -2,11 +2,12 @@ import { useState } from 'react'
 import {
   Activity, ArrowRight, CheckCircle2, ChevronRight, Copy,
   ExternalLink, FileCheck2, FilePlus2, Fingerprint,
-  Globe2, LayoutDashboard, Menu, Search, Send, ShieldCheck,
+  Globe2, LayoutDashboard, Menu, Search, Send, Share2, ShieldCheck,
   Sparkles, Wallet, X, XCircle
 } from 'lucide-react'
 import PublishProof from './PublishProof'
 import VerifyOnChain from './VerifyOnChain'
+import ShareProof from './ShareProof'
 import BlockchainStatus from './BlockchainStatus'
 import './App.css'
 
@@ -37,7 +38,7 @@ function Status({ value }) {
 }
 
 export default function App() {
-  const [page, setPage] = useState('home')
+  const [page, setPage] = useState(() => new URLSearchParams(window.location.search).has('tx') ? 'verify' : 'home')
   const [menuOpen, setMenuOpen] = useState(false)
   const [account, setAccount] = useState('')
   const [accountName, setAccountName] = useState('')
@@ -137,11 +138,28 @@ export default function App() {
     catch { setNotice('Clipboard access unavailable.') }
   }
 
+  async function sharePublishedProof(proof) {
+    if (!proof?.txHash || !proof?.proofHash || !proof?.blockHash) {
+      setNotice('This proof has no complete finalized blockchain reference yet.')
+      return
+    }
+    const url = new URL(window.location.origin + window.location.pathname)
+    url.searchParams.set('tx', proof.txHash)
+    url.searchParams.set('proof', proof.proofHash)
+    url.searchParams.set('block', proof.blockHash)
+    try {
+      await navigator.clipboard.writeText(url.toString())
+      setNotice('Share Proof link copied. Anyone can verify without connecting a wallet.')
+    } catch {
+      setNotice('Unable to copy the link. Check clipboard permissions.')
+    }
+  }
+
   return page === 'home' ? (
     <div className="ui-site">
       <header className="ui-site-header ui-container">
         <button className="ui-brand" onClick={() => go('home')}><span className="ui-brand-mark">P</span> proof<span className="ui-brand-dot">.</span></button>
-        <div className="ui-header-actions"><span className="ui-chain-tag"><i/> PORTALDOT V3 TESTNET</span><button className="ui-btn ui-primary" onClick={() => go('overview')}>Launch App <ArrowRight size={17}/></button></div>
+        <div className="ui-header-actions"><span className="ui-chain-tag ui-chain-logo"><img src="/portaldot-mark.png" alt="Portaldot"/> PORTALDOT V3 TESTNET</span><button className="ui-btn ui-primary" onClick={() => go('overview')}>Launch App <ArrowRight size={17}/></button></div>
       </header>
       <main>
         <section className="ui-hero ui-container">
@@ -170,11 +188,11 @@ export default function App() {
         <div className="ui-side-brand"><button className="ui-brand" onClick={() => go('home')}><span className="ui-brand-mark">P</span> proof<span className="ui-brand-dot">.</span></button><button className="ui-mobile-close" onClick={() => setMenuOpen(false)} aria-label="Close menu"><X size={19}/></button></div>
         <div className="ui-side-label">WORKSPACE</div>
         <nav className="ui-menu">{menus.map(item => <button key={item.id} className={page === item.id ? 'ui-menu-active' : ''} onClick={() => go(item.id)}><item.icon size={18}/>{item.label}{page === item.id && <span className="ui-menu-dot"/>}</button>)}</nav>
-        <div className="ui-side-bottom"><div className="ui-side-chain"><i/> Portaldot V3 Testnet</div><p>Hacker House 2026<br/><span>Track 4 · Ecosystem DApps</span></p><button onClick={() => go('home')}><Globe2 size={15}/> View website <ArrowRight size={14}/></button></div>
+        <div className="ui-side-bottom"><div className="ui-side-chain ui-chain-logo"><img src="/portaldot-mark.png" alt=""/> Portaldot V3 Testnet</div><p>Hacker House 2026<br/><span>Track 4 · Ecosystem DApps</span></p><button onClick={() => go('home')}><Globe2 size={15}/> View website <ArrowRight size={14}/></button></div>
       </aside>
       {menuOpen && <button className="ui-overlay" onClick={() => setMenuOpen(false)} aria-label="Close navigation"/>}
       <div className="ui-main">
-        <header className="ui-topbar"><div className="ui-crumb"><button className="ui-mobile-menu" onClick={() => setMenuOpen(true)} aria-label="Open navigation"><Menu size={21}/></button><span>Workspace</span><ChevronRight size={15}/><strong>{menus.find(m => m.id === page)?.label}</strong></div><div className="ui-top-actions"><span className="ui-top-chain"><i/> V3 TESTNET</span><button className="ui-wallet" onClick={connectWallet} disabled={busy}><Wallet size={17}/>{busy ? 'Connecting...' : account ? compact(account, 6) : 'Connect Wallet'}</button></div></header>
+        <header className="ui-topbar"><div className="ui-crumb"><button className="ui-mobile-menu" onClick={() => setMenuOpen(true)} aria-label="Open navigation"><Menu size={21}/></button><span>Workspace</span><ChevronRight size={15}/><strong>{menus.find(m => m.id === page)?.label}</strong></div><div className="ui-top-actions"><span className="ui-top-chain ui-chain-logo"><img src="/portaldot-mark.png" alt="Portaldot"/> V3 TESTNET</span><button className="ui-wallet" onClick={connectWallet} disabled={busy}><Wallet size={17}/>{busy ? 'Connecting...' : account ? compact(account, 6) : 'Connect Wallet'}</button></div></header>
         <main className="ui-body">
           {notice && <div className="ui-notice" role="status">{notice}<button onClick={() => setNotice('')} aria-label="Close notification"><X size={17}/></button></div>}
           {page === 'overview' && <>
@@ -185,8 +203,12 @@ export default function App() {
           </>}
           {page === 'submit' && <><div className="ui-page-title"><div><span className="ui-eyebrow">STEP 01 · SUBMIT</span><h1>New contribution</h1><p>Describe your work and provide evidence.</p></div></div><section className="ui-panel ui-form-panel"><div className="ui-panel-head"><div><h2>Contribution details</h2><p>Fields marked * are required.</p></div><FilePlus2 size={21}/></div><form className="ui-form" onSubmit={submit}><label htmlFor="title">Contribution title *</label><input id="title" value={title} onChange={e => setTitle(e.target.value)} placeholder="e.g. Portaldot V3 Beginner Guide" maxLength={120} required/><label htmlFor="category">Category *</label><select id="category" value={category} onChange={e => setCategory(e.target.value)}><option>Community</option><option>Education</option><option>Development</option><option>Content</option><option>Other</option></select><label htmlFor="description">Description *</label><textarea id="description" value={description} onChange={e => setDescription(e.target.value)} placeholder="Describe your contribution..." rows={5} maxLength={2000} required/><label htmlFor="evidence">Evidence URL *</label><input id="evidence" type="url" value={evidence} onChange={e => setEvidence(e.target.value)} placeholder="https://..." required/><p className="ui-help">This submission is saved locally. Publishing on-chain happens after demo approval.</p><button className="ui-btn ui-primary" type="submit"><Send size={16}/> Submit Contribution</button></form></section></>}
           {page === 'review' && <><div className="ui-page-title"><div><span className="ui-eyebrow">STEP 02 · REVIEW</span><h1>Review queue</h1><p>Evaluate the evidence provided by contributors.</p></div><span className="ui-count">{pending.length} pending</span></div><div className="ui-info"><ShieldCheck size={20}/> Demo reviewer mode: any connected wallet can approve local records. Reviewer authorization is not yet implemented.</div><section className="ui-panel"><div className="ui-panel-head"><div><h2>Pending submissions</h2><p>Awaiting a demo review decision</p></div></div>{pending.length === 0 ? <div className="ui-empty"><CheckCircle2 size={26}/><h3>All caught up</h3><p>No contributions are currently awaiting review.</p></div> : <div className="ui-record-list">{pending.map(item => <article className="ui-record" key={item.id}><div className="ui-record-head"><span className="ui-record-icon"><FileCheck2 size={20}/></span><div><h3>{item.title}</h3><small>{item.category} · {compact(item.contributor, 12)}</small></div><Status value={item.status}/></div><p>{item.description}</p><div className="ui-record-bottom"><a href={item.evidence} target="_blank" rel="noopener noreferrer">Review evidence <ExternalLink size={14}/></a><div><button className="ui-btn ui-danger" disabled={!account} onClick={() => review(item.id, 'Rejected')}><XCircle size={16}/> Reject</button><button className="ui-btn ui-success" disabled={!account} onClick={() => review(item.id, 'Approved')}><CheckCircle2 size={16}/> Approve</button></div></div></article>)}</div>}</section></>}
-          {page === 'proofs' && <><div className="ui-page-title"><div><span className="ui-eyebrow">CONTRIBUTION HISTORY</span><h1>My Proofs</h1><p>Track review status and publish approved proof hashes.</p></div><button className="ui-btn ui-primary" onClick={() => go('submit')}><FilePlus2 size={16}/> New contribution</button></div><section className="ui-panel"><div className="ui-panel-head"><div><h2>Contribution records</h2><p>Stored in this browser for your wallet address</p></div><span className="ui-count">{mine.length} records</span></div>{!account ? <div className="ui-empty"><Wallet size={26}/><h3>Wallet not connected</h3><p>Connect your wallet to view your records.</p></div> : mine.length === 0 ? <div className="ui-empty"><FilePlus2 size={26}/><h3>No records</h3><p>Submit a contribution to start your history.</p></div> : <div className="ui-record-list">{mine.map(item => <article className="ui-record" key={item.id}><div className="ui-record-head"><span className="ui-record-icon"><FileCheck2 size={20}/></span><div><h3>{item.title}</h3><small>{item.category} · {new Date(item.createdAt).toLocaleDateString()}</small></div><Status value={item.status}/></div><p>{item.description}</p><div className="ui-record-bottom"><a href={item.evidence} target="_blank" rel="noopener noreferrer">Evidence <ExternalLink size={14}/></a><button className="ui-link-button" onClick={() => copy(item.id)}><Copy size={14}/> Copy record ID</button></div>{storedProofs[item.id] && <div className="ui-onchain-label"><CheckCircle2 size={15}/> Published on-chain · {compact(storedProofs[item.id].txHash, 13)}</div>}</article>)}</div>}</section><div className="ui-integrated"><PublishProof account={account} contributions={contributions}/></div></>}
-          {page === 'verify' && <><div className="ui-page-title"><div><span className="ui-eyebrow">TRUST, BUT VERIFY</span><h1>Verify proof</h1><p>Check a contribution proof against Portaldot V3 blockchain data.</p></div></div><div className="ui-info"><ShieldCheck size={20}/> Verification checks transaction inclusion and successful execution, not the quality of a contribution or the reviewer's authority.</div><div className="ui-integrated"><VerifyOnChain/></div><section className="ui-panel ui-local"><div className="ui-panel-head"><div><h2>Local record lookup</h2><p>Optional browser-only demo status check</p></div></div><form className="ui-form" onSubmit={localVerify}><label htmlFor="local-id">Local record ID</label><input id="local-id" value={localId} onChange={e => setLocalId(e.target.value)} placeholder="Paste record ID" required/><button className="ui-btn ui-outline" type="submit"><Search size={16}/> Check local status</button></form>{localResult && <p className="ui-help">{localResult}</p>}</section></>}
+          {page === 'proofs' && <><div className="ui-page-title"><div><span className="ui-eyebrow">CONTRIBUTION HISTORY</span><h1>My Proofs</h1><p>Track review status and publish approved proof hashes.</p></div><button className="ui-btn ui-primary" onClick={() => go('submit')}><FilePlus2 size={16}/> New contribution</button></div><section className="ui-panel"><div className="ui-panel-head"><div><h2>Contribution records</h2><p>Stored in this browser for your wallet address</p></div><span className="ui-count">{mine.length} records</span></div>{!account ? <div className="ui-empty"><Wallet size={26}/><h3>Wallet not connected</h3><p>Connect your wallet to view your records.</p></div> : mine.length === 0 ? <div className="ui-empty"><FilePlus2 size={26}/><h3>No records</h3><p>Submit a contribution to start your history.</p></div> : <div className="ui-record-list">{mine.map(item => <article className="ui-record" key={item.id}><div className="ui-record-head"><span className="ui-record-icon"><FileCheck2 size={20}/></span><div><h3>{item.title}</h3><small>{item.category} · {new Date(item.createdAt).toLocaleDateString()}</small></div><Status value={item.status}/></div><p>{item.description}</p><div className="ui-record-bottom"><a href={item.evidence} target="_blank" rel="noopener noreferrer">Evidence <ExternalLink size={14}/></a><button className="ui-link-button" onClick={() => copy(item.id)}><Copy size={14}/> Copy record ID</button></div>{storedProofs[item.id] && <div className="ui-onchain-proof-panel">
+  <div className="ui-onchain-proof-head"><CheckCircle2 size={17}/><strong>Published on Portaldot V3</strong><span>On-chain</span></div>
+  <p>Transaction: <code>{compact(storedProofs[item.id].txHash, 18)}</code></p>
+  <div className="ui-onchain-proof-actions"><button type="button" className="ui-btn ui-primary" onClick={() => sharePublishedProof(storedProofs[item.id])}><Share2 size={16}/> Share Proof</button><button type="button" className="ui-btn ui-outline" onClick={() => go('verify')}><Search size={16}/> Verify on-chain</button></div>
+</div>}</article>)}</div>}</section><div className="ui-integrated"><PublishProof account={account} contributions={contributions}/></div></>}
+          {page === 'verify' && <><div className="ui-page-title"><div><span className="ui-eyebrow">TRUST, BUT VERIFY</span><h1>Verify proof</h1><p>Check a contribution proof against Portaldot V3 blockchain data.</p></div></div><div className="ui-info"><ShieldCheck size={20}/> Verification checks transaction inclusion and successful execution, not the quality of a contribution or the reviewer's authority.</div><ShareProof account={account} contributions={contributions}/><div className="ui-integrated"><VerifyOnChain/></div><section className="ui-panel ui-local"><div className="ui-panel-head"><div><h2>Local record lookup</h2><p>Optional browser-only demo status check</p></div></div><form className="ui-form" onSubmit={localVerify}><label htmlFor="local-id">Local record ID</label><input id="local-id" value={localId} onChange={e => setLocalId(e.target.value)} placeholder="Paste record ID" required/><button className="ui-btn ui-outline" type="submit"><Search size={16}/> Check local status</button></form>{localResult && <p className="ui-help">{localResult}</p>}</section></>}
           {page === 'network' && <><div className="ui-page-title"><div><span className="ui-eyebrow">LIVE INFRASTRUCTURE</span><h1>Network status</h1><p>Read-only blockchain data from Portaldot V3 Testnet.</p></div></div><section className="ui-panel"><div className="ui-panel-head"><div><h2>Wallet connection</h2><p>Portaldot native extension</p></div><Wallet size={21}/></div><div className="ui-wallet-info"><div><span>Account</span><strong>{accountName || 'Not connected'}</strong></div><div><span>Address</span><strong>{account || '—'}</strong></div><div><span>Status</span><strong>{walletStatus}</strong></div></div><div className="ui-wallet-actions">{account ? <><button className="ui-btn ui-outline" onClick={() => copy(account)}><Copy size={15}/> Copy address</button><button className="ui-btn ui-text" onClick={disconnect}>Disconnect</button></> : <button className="ui-btn ui-primary" onClick={connectWallet} disabled={busy}><Wallet size={16}/> Connect wallet</button>}</div></section><div className="ui-integrated"><BlockchainStatus account={account}/></div></>}
           <footer className="ui-app-footer"><span>Proof of Contribution · Portaldot Hacker House 2026</span><span>Testnet MVP</span></footer>
         </main>
