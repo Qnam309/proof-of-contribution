@@ -41,3 +41,28 @@
 .ui-onchain-proof-actions{display:flex;gap:10px;flex-wrap:wrap}
 .ui-onchain-proof-actions .ui-btn{font-size:12px;padding:10px 14px}
 @media(max-width:760px){.ui-onchain-proof-actions .ui-btn{flex:1}.ui-onchain-proof-head span{margin-left:0}}
+
+/* Explore Proofs - public proof gallery */
+.ui-explore-panel{overflow:hidden}
+.ui-explore-toolbar{display:flex;align-items:center;gap:14px;padding:20px 24px;border-bottom:1px solid #2b3651}
+.ui-explore-search{display:flex;align-items:center;gap:10px;flex:1;min-width:0;background:#0c1324;border:1px solid #34405d;border-radius:11px;color:#9683e8;padding:0 14px}
+.ui-explore-search input{width:100%;min-width:0;height:45px;border:none;outline:none;background:transparent;color:#e9ecfb;font-size:13px}
+.ui-explore-toolbar select{height:47px;max-width:220px;border:1px solid #34405d;border-radius:11px;color:#e9ecfb;background:#0c1324;padding:0 13px;font-size:13px}
+.ui-explore-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px;padding:24px}
+.ui-explore-card{border:1px solid #34405d;border-radius:16px;padding:24px;background:linear-gradient(130deg,#1a2339,#121b2d);min-width:0}
+.ui-explore-card-top{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:20px}
+.ui-explore-card-icon{display:grid;place-items:center;height:42px;width:42px;border-radius:12px;background:#8064ff2a;color:#b9a7ff}
+.ui-explore-status{display:inline-flex;align-items:center;gap:6px;background:#153f36;border:1px solid #2c6657;color:#98f0c9;padding:7px 11px;border-radius:999px;font-size:10px;font-weight:800;white-space:nowrap}
+.ui-explore-category{color:#a18dff;font-size:11px;letter-spacing:.4px;font-weight:700}
+.ui-explore-card h3{font-size:21px;margin:12px 0}
+.ui-explore-card>p{color:#aab4d0;font-size:13px;line-height:1.75;min-height:48px}
+.ui-explore-details{display:flex;flex-wrap:wrap;gap:12px 22px;margin:24px 0;padding:16px 0;border-top:1px solid #303d5a;border-bottom:1px solid #303d5a;color:#9aa9ca;font-size:12px}
+.ui-explore-details strong{color:#dfdeff}
+.ui-explore-details code{color:#bfaeff;overflow-wrap:anywhere}
+.ui-explore-buttons{display:flex;flex-wrap:wrap;gap:10px}
+.ui-explore-empty{text-align:center;grid-column:1/-1;padding:60px 14px;color:#9da8c3}
+.ui-explore-empty svg{color:#a38cfe}
+.ui-explore-empty h3{color:#e5e7fa;margin:15px 0 7px}
+.ui-explore-disclaimer{color:#8593b3;font-size:12px;line-height:1.7}
+@media(max-width:850px){.ui-explore-grid{grid-template-columns:1fr}}
+@media(max-width:580px){.ui-explore-toolbar{flex-direction:column;align-items:stretch}.ui-explore-toolbar select{max-width:none}.ui-explore-grid{padding:15px}.ui-explore-card{padding:18px}}
