@@ -28,7 +28,7 @@ async function approve(registry: Awaited<ReturnType<typeof fixture>>["registry"]
 describe("ContributionRegistry", () => {
   it("sets deployer as admin and starts count at 1", async () => {
     const { registry, admin } = await networkHelpers.loadFixture(fixture);
-    assert.equal(await registry.read.admin(), admin.account.address);
+    assert.equal((await registry.read.admin()).toLowerCase(), admin.account.address.toLowerCase());
     assert.equal(await registry.read.nextId(), 1n);
   });
 
@@ -36,7 +36,7 @@ describe("ContributionRegistry", () => {
     const { registry, author } = await networkHelpers.loadFixture(fixture);
     await submit(registry, author);
     const item = await registry.read.getContribution([1n]);
-    assert.equal(item.contributor, author.account.address);
+    assert.equal(item.contributor.toLowerCase(), author.account.address.toLowerCase());
     assert.equal(item.contentHash, HASH);
     assert.equal(item.evidenceURI, URI);
     assert.equal(item.status, 1);
@@ -93,7 +93,7 @@ describe("ContributionRegistry", () => {
     await approve(registry, admin, reviewer);
     const item = await registry.read.getContribution([1n]);
     assert.equal(item.status, 2);
-    assert.equal(item.reviewer, reviewer.account.address);
+    assert.equal(item.reviewer.toLowerCase(), reviewer.account.address.toLowerCase());
     assert.ok(item.reviewedAt > 0n);
     assert.equal(await registry.read.verifyContribution([1n, HASH]), true);
     assert.equal(await registry.read.verifyContribution([1n, OTHER_HASH]), false);
