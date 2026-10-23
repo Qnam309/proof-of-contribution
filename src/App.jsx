@@ -2,12 +2,13 @@ import { useState } from 'react'
 import {
   Activity, ArrowRight, CheckCircle2, ChevronRight, Copy,
   ExternalLink, FileCheck2, FilePlus2, Fingerprint,
-  Globe2, LayoutDashboard, Menu, Search, Send, Share2, ShieldCheck,
+  Globe2, LayoutDashboard, Menu, Search, Send, Share2, ShieldCheck, Compass,
   Sparkles, Wallet, X, XCircle
 } from 'lucide-react'
 import PublishProof from './PublishProof'
 import VerifyOnChain from './VerifyOnChain'
 import ShareProof from './ShareProof'
+import ExploreProofs from './ExploreProofs'
 import BlockchainStatus from './BlockchainStatus'
 import './App.css'
 
@@ -23,6 +24,7 @@ const menus = [
   { id: 'submit', label: 'Submit', icon: FilePlus2 },
   { id: 'review', label: 'Review', icon: ShieldCheck },
   { id: 'proofs', label: 'My Proofs', icon: Fingerprint },
+  { id: 'explore', label: 'Explore Proofs', icon: Compass },
   { id: 'verify', label: 'Verify', icon: Search },
   { id: 'network', label: 'Network', icon: Activity }
 ]
@@ -208,6 +210,7 @@ export default function App() {
   <p>Transaction: <code>{compact(storedProofs[item.id].txHash, 18)}</code></p>
   <div className="ui-onchain-proof-actions"><button type="button" className="ui-btn ui-primary" onClick={() => sharePublishedProof(storedProofs[item.id])}><Share2 size={16}/> Share Proof</button><button type="button" className="ui-btn ui-outline" onClick={() => go('verify')}><Search size={16}/> Verify on-chain</button></div>
 </div>}</article>)}</div>}</section><div className="ui-integrated"><PublishProof account={account} contributions={contributions}/></div></>}
+          {page === 'explore' && <ExploreProofs onVerify={() => go('verify')} />}
           {page === 'verify' && <><div className="ui-page-title"><div><span className="ui-eyebrow">TRUST, BUT VERIFY</span><h1>Verify proof</h1><p>Check a contribution proof against Portaldot V3 blockchain data.</p></div></div><div className="ui-info"><ShieldCheck size={20}/> Verification checks transaction inclusion and successful execution, not the quality of a contribution or the reviewer's authority.</div><ShareProof account={account} contributions={contributions}/><div className="ui-integrated"><VerifyOnChain/></div><section className="ui-panel ui-local"><div className="ui-panel-head"><div><h2>Local record lookup</h2><p>Optional browser-only demo status check</p></div></div><form className="ui-form" onSubmit={localVerify}><label htmlFor="local-id">Local record ID</label><input id="local-id" value={localId} onChange={e => setLocalId(e.target.value)} placeholder="Paste record ID" required/><button className="ui-btn ui-outline" type="submit"><Search size={16}/> Check local status</button></form>{localResult && <p className="ui-help">{localResult}</p>}</section></>}
           {page === 'network' && <><div className="ui-page-title"><div><span className="ui-eyebrow">LIVE INFRASTRUCTURE</span><h1>Network status</h1><p>Read-only blockchain data from Portaldot V3 Testnet.</p></div></div><section className="ui-panel"><div className="ui-panel-head"><div><h2>Wallet connection</h2><p>Portaldot native extension</p></div><Wallet size={21}/></div><div className="ui-wallet-info"><div><span>Account</span><strong>{accountName || 'Not connected'}</strong></div><div><span>Address</span><strong>{account || '—'}</strong></div><div><span>Status</span><strong>{walletStatus}</strong></div></div><div className="ui-wallet-actions">{account ? <><button className="ui-btn ui-outline" onClick={() => copy(account)}><Copy size={15}/> Copy address</button><button className="ui-btn ui-text" onClick={disconnect}>Disconnect</button></> : <button className="ui-btn ui-primary" onClick={connectWallet} disabled={busy}><Wallet size={16}/> Connect wallet</button>}</div></section><div className="ui-integrated"><BlockchainStatus account={account}/></div></>}
           <footer className="ui-app-footer"><span>Proof of Contribution · Portaldot Hacker House 2026</span><span>Testnet MVP</span></footer>
