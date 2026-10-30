@@ -1,0 +1,423 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>PoC — Grant Reviewer</title>
+  <style>
+    body {
+      background: #0b1020;
+      color: #f2f5ff;
+      font: 15px Arial, sans-serif;
+      padding: 30px 16px;
+    }
+    main { max-width: 650px; margin: auto; }
+    section {
+      background: #161e32;
+      border: 1px solid #35415e;
+      border-radius: 12px;
+      padding: 20px;
+      margin: 16px 0;
+    }
+    button {
+      background: #7857ed;
+      color: white;
+      border: 0;
+      border-radius: 8px;
+      padding: 12px 16px;
+      cursor: pointer;
+      margin: 8px 0;
+    }
+    button:disabled { opacity: .45; }
+    pre {
+      background: #090e1b;
+      padding: 14px;
+      border-radius: 8px;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+    .warning { color: #ffd38c; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>PoC — Grant Reviewer on V3</h1>
+  <p class="warning">TESTNET ONLY. This action costs tPOT.</p>
+
+  <section>
+    <h3>1. Connect Admin</h3>
+    <button id="connect">Connect Admin MetaMask</button>
+    <pre id="wallet">Not connected</pre>
+  </section>
+
+  <section>
+    <h3>2. Reviewer</h3>
+    <pre id="reviewer"></pre>
+    <button id="estimate" disabled>Check gas & permission</button>
+    <pre id="preview">Not checked</pre>
+  </section>
+
+  <section>
+    <h3>3. Grant permission</h3>
+    <label>
+      <input id="agree" type="checkbox" />
+      I agree to grant reviewer access on testnet.
+    </label>
+    <p>
+      <button id="grant" disabled>Grant Reviewer</button>
+    </p>
+  </section>
+
+  <section>
+    <h3>4. Transaction result</h3>
+    <pre id="result">No transaction sent.</pre>
+  </section>
+</main>
+
+<script type="module">
+import {
+  createPublicClient,
+  createWalletClient,
+  custom,
+  defineChain,
+  formatEther,
+  http
+} from "viem";
+
+import abi from "./src/contributionRegistryAbi.json";
+
+const RPC = "https://test-evm-rpc-v3.portaldot.dev";
+
+const CONTRACT =
+  "0x2719e83b13f737a4f3988b7e13ef028e93bb1cb2";
+
+const ADMIN =
+  "0x50C7FAbAfE8716D19D31c3853589BADBD56541C2";
+
+const REVIEWER =
+  "0xf51e2695aB684496E902Ba30911318A2644bD344";
+
+const chain = defineChain({
+  id: 420420777,
+  name: "Portaldot V3 Testnet",
+  nativeCurrency: {
+    name: "POT",
+    symbol: "POT",
+    decimals: 18
+  },
+  rpcUrls: {
+    default: { http: [RPC] }
+  },
+  testnet: true
+});
+
+const publicClient = createPublicClient({
+  chain,
+  transport: http(RPC)
+});
+
+const $ = (id) => document.getElementById(id);
+
+let provider;
+let walletClient;
+let account;
+let checked = null;
+let busy = false;
+
+$("reviewer").textContent =
+  "Reviewer address:\n" + REVIEWER +
+  "\n\nContract:\n" + CONTRACT;
+
+function buttons() {
+  $("connect").disabled = busy;
+  $("estimate").disabled = busy || !account;
+  $("grant").disabled =
+    busy || !checked || !$("agree").checked;
+}
+
+function reset() {
+  checked = null;
+  $("agree").checked = false;
+  $("preview").textContent = "Not checked";
+  buttons();
+}
+
+function findMetaMask() {
+  const eth = window.ethereum;
+
+  if (Array.isArray(eth?.providers)) {
+    return eth.providers.find(
+      (p) => p.isMetaMask && !p.isPortaldot
+    ) || null;
+  }
+
+  return eth?.isMetaMask ? eth : null;
+}
+
+async function ensureAdmin() {
+  if (!provider || !walletClient) {
+    throw new Error("Connect Admin first.");
+  }
+
+  const currentChain = Number(
+    BigInt(await provider.request({
+      method: "eth_chainId"
+    }))
+  );
+
+  if (currentChain !== 420420777) {
+    throw new Error("Select Portaldot V3 Testnet.");
+  }
+
+  const accounts = await walletClient.getAddresses();
+
+  if (
+    !accounts[0] ||
+    accounts[0].toLowerCase() !== ADMIN.toLowerCase()
+  ) {
+    throw new Error(
+      "Select Account 1 (Admin) in MetaMask."
+    );
+  }
+
+  account = accounts[0];
+}
+
+$("connect").onclick = async () => {
+  try {
+    busy = true;
+    buttons();
+
+    provider = findMetaMask();
+
+    if (!provider) {
+      throw new Error("MetaMask not found.");
+    }
+
+    walletClient = createWalletClient({
+      chain,
+      transport: custom(provider)
+    });
+
+    await walletClient.requestAddresses();
+    await ensureAdmin();
+
+    const balance = await publicClient.getBalance({
+      address: account
+    });
+
+    $("wallet").textContent =
+      "Admin: " + account +
+      "\nBalance: " + formatEther(balance) + " POT";
+
+    reset();
+  } catch (e) {
+    account = null;
+    $("wallet").textContent =
+      "ERROR: " + (e.shortMessage || e.message);
+  } finally {
+    busy = false;
+    buttons();
+  }
+};
+
+$("estimate").onclick = async () => {
+  try {
+    busy = true;
+    reset();
+    buttons();
+
+    await ensureAdmin();
+
+    const isReviewer = await publicClient.readContract({
+      address: CONTRACT,
+      abi,
+      functionName: "reviewers",
+      args: [REVIEWER]
+    });
+
+    if (isReviewer) {
+      $("preview").textContent =
+        "Reviewer already authorized. No TX needed.";
+      return;
+    }
+
+    const args = [REVIEWER, true];
+
+    const gasEstimated =
+      await publicClient.estimateContractGas({
+        address: CONTRACT,
+        abi,
+        functionName: "setReviewer",
+        args,
+        account
+      });
+
+    const gasLimit =
+      (gasEstimated * 105n + 99n) / 100n;
+
+    const gasPrice = await publicClient.getGasPrice();
+    const reserve = gasLimit * gasPrice;
+
+    const balance = await publicClient.getBalance({
+      address: account
+    });
+
+    $("preview").textContent =
+      "Authorized currently: NO\n" +
+      "Estimated gas: " + gasEstimated + "\n" +
+      "Gas limit (+5%): " + gasLimit + "\n" +
+      "Gas price: " + gasPrice + " wei\n" +
+      "Gas reserve: " + formatEther(reserve) +
+      " POT\n" +
+      "Admin balance: " + formatEther(balance) +
+      " POT\n\n" +
+      "Estimated reserve is not the final fee.";
+
+    if (balance < reserve) {
+      throw new Error(
+        "Insufficient POT. Do not send."
+      );
+    }
+
+    checked = { gasLimit, gasPrice, reserve };
+
+  } catch (e) {
+    $("preview").textContent +=
+      "\n\nERROR: " +
+      (e.shortMessage || e.message);
+  } finally {
+    busy = false;
+    buttons();
+  }
+};
+
+$("agree").onchange = buttons;
+
+$("grant").onclick = async () => {
+  if (!checked || busy) return;
+
+  try {
+    busy = true;
+    buttons();
+
+    await ensureAdmin();
+
+    const latestPrice = await publicClient.getGasPrice();
+
+    if (latestPrice > checked.gasPrice) {
+      throw new Error(
+        "Gas price increased. Check gas again."
+      );
+    }
+
+    const balance = await publicClient.getBalance({
+      address: account
+    });
+
+    if (balance < checked.reserve) {
+      throw new Error(
+        "Insufficient balance. Check gas again."
+      );
+    }
+
+    const alreadyAuthorized =
+      await publicClient.readContract({
+        address: CONTRACT,
+        abi,
+        functionName: "reviewers",
+        args: [REVIEWER]
+      });
+
+    if (alreadyAuthorized) {
+      throw new Error(
+        "Reviewer is already authorized."
+      );
+    }
+
+    const confirmed = window.confirm(
+      "Grant reviewer permission?\n\n" +
+      REVIEWER + "\n\n" +
+      "Estimated gas reserve: " +
+      formatEther(checked.reserve) + " POT\n\n" +
+      "MetaMask will ask for final confirmation."
+    );
+
+    if (!confirmed) return;
+
+    $("result").textContent =
+      "Opening MetaMask...";
+
+    const hash = await walletClient.writeContract({
+      chain,
+      account,
+      address: CONTRACT,
+      abi,
+      functionName: "setReviewer",
+      args: [REVIEWER, true],
+      gas: checked.gasLimit,
+      gasPrice: checked.gasPrice
+    });
+
+    $("result").textContent =
+      "TX Hash: " + hash +
+      "\nWaiting for receipt...";
+
+    const receipt =
+      await publicClient.waitForTransactionReceipt({
+        hash,
+        timeout: 120000
+      });
+
+    const authorized =
+      await publicClient.readContract({
+        address: CONTRACT,
+        abi,
+        functionName: "reviewers",
+        args: [REVIEWER]
+      });
+
+    $("result").textContent =
+      "TX Hash: " + hash +
+      "\nStatus: " + receipt.status +
+      "\nBlock: " + receipt.blockNumber +
+      "\nReviewer authorized: " + authorized +
+      "\n\n" +
+      (
+        receipt.status === "success" && authorized
+          ? "GRANT REVIEWER SUCCESSFUL"
+          : "GRANT NOT VERIFIED"
+      );
+
+    reset();
+
+  } catch (e) {
+    $("result").textContent +=
+      "\n\nERROR: " +
+      (e.shortMessage || e.message);
+  } finally {
+    busy = false;
+    buttons();
+  }
+};
+
+if (window.ethereum?.on) {
+  window.ethereum.on("accountsChanged", () => {
+    account = null;
+    reset();
+    $("wallet").textContent =
+      "Account changed. Reconnect.";
+  });
+
+  window.ethereum.on("chainChanged", () => {
+    account = null;
+    reset();
+    $("wallet").textContent =
+      "Network changed. Reconnect.";
+  });
+}
+
+buttons();
+</script>
+</body>
+</html>

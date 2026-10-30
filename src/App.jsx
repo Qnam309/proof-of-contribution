@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   Activity, ArrowRight, CheckCircle2, ChevronRight, Copy,
   ExternalLink, FileCheck2, FilePlus2, Fingerprint,
@@ -10,7 +10,14 @@ import VerifyOnChain from './VerifyOnChain'
 import ShareProof from './ShareProof'
 import ExploreProofs from './ExploreProofs'
 import BlockchainStatus from './BlockchainStatus'
+import EvmSubmitPanel from './EvmSubmitPanel'
+import EvmReviewPanel from './EvmReviewPanel'
+import EvmVerifyPanel from './EvmVerifyPanel'
+import EvmRegistryList from './EvmRegistryList'
+import EvmAdminPanel from './EvmAdminPanel'
+import EvmOverview from './EvmOverview'
 import './App.css'
+import './PoCUnified.css'
 
 const STORAGE_KEY = 'poc-contributions-v1'
 const PROOF_KEY = 'poc-onchain-proofs-v1'
@@ -33,7 +40,8 @@ const menus = [
   { id: 'proofs', label: 'My Proofs', icon: Fingerprint },
   { id: 'explore', label: 'Explore Proofs', icon: Compass },
   { id: 'verify', label: 'Verify', icon: Search },
-  { id: 'network', label: 'Network', icon: Activity }
+  { id: 'network', label: 'Network', icon: Activity },
+  { id: 'admin', label: 'Admin', icon: ShieldCheck }
 ]
 function readStorage(key, fallback) {
   try {
@@ -42,19 +50,35 @@ function readStorage(key, fallback) {
   } catch { return fallback }
 }
 function compact(value, n = 7) { return value ? `${value.slice(0, n)}...${value.slice(-5)}` : '—' }
+const V3_CHAIN_ID = 420420777
+
 function Status({ value }) {
   return <span className={`ui-status ${value === 'Approved' ? 'is-approved' : value === 'Rejected' ? 'is-rejected' : 'is-pending'}`}>{value}</span>
 }
 
+function ModeSwitch({ mode, setMode, options = [['onchain','On-chain · V3'], ['demo','Demo · Browser']] }) {
+  return <div className="poc-mode-switch" role="group" aria-label="Data mode">{options.map(([value,label]) => <button type="button" key={value} className={mode === value ? 'active' : ''} onClick={() => setMode(value)} aria-pressed={mode === value}>{label}</button>)}</div>
+}
+
 export default function App() {
-  const [page, setPage] = useState(() => new URLSearchParams(window.location.search).has('tx') ? 'verify' : 'home')
+  const [page, setPage] = useState(() => (new URLSearchParams(window.location.search).has('tx') || new URLSearchParams(window.location.search).has('contribution')) ? 'verify' : 'home')
   const [menuOpen, setMenuOpen] = useState(false)
   const [account, setAccount] = useState('')
   const [accountName, setAccountName] = useState('')
+  const [walletKind, setWalletKind] = useState('')
+  const [walletPickerOpen, setWalletPickerOpen] = useState(false)
+  const [evmProviders, setEvmProviders] = useState([])
+  const selectedProvider = useRef(null)
+  const walletKindRef = useRef('')
   const [walletStatus, setWalletStatus] = useState('Not connected')
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState('')
-  const [showDemoPreview, setShowDemoPreview] = useState(true)
+  const [showDemoPreview, setShowDemoPreview] = useState(false)
+  const [submitMode, setSubmitMode] = useState('onchain')
+  const [reviewMode, setReviewMode] = useState('onchain')
+  const [proofMode, setProofMode] = useState('onchain')
+  const [verifyMode, setVerifyMode] = useState('evm')
+  const [exploreMode, setExploreMode] = useState('onchain')
   const [contributions, setContributions] = useState(() => {
     const items = readStorage(STORAGE_KEY, [])
     return Array.isArray(items) ? items : []
@@ -77,28 +101,113 @@ export default function App() {
     setMenuOpen(false)
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
-  async function connectWallet() {
+  // EIP-6963 finds multiple EVM wallets without relying on window.ethereum.
+  useEffect(() => {
+    const found = new Map()
+    function onProvider(event) {
+      const detail = event?.detail
+      if (!detail?.info?.uuid || !detail?.provider) return
+      found.set(detail.info.uuid, detail)
+      setEvmProviders([...found.values()])
+    }
+    window.addEventListener('eip6963:announceProvider', onProvider)
+    window.dispatchEvent(new Event('eip6963:requestProvider'))
+    return () => window.removeEventListener('eip6963:announceProvider', onProvider)
+  }, [])
+
+  function chooseEvmProvider(kind) {
+    // Prefer the EIP-6963 identity; avoid OKX's MetaMask compatibility flag.
+    const matching = evmProviders.find(({ info }) => {
+      const rdns = (info.rdns || '').toLowerCase()
+      const name = (info.name || '').toLowerCase()
+      return kind === 'metamask'
+        ? rdns === 'io.metamask' || name === 'metamask'
+        : rdns.includes('okx') || name.includes('okx')
+    })
+    if (matching) return matching.provider
+    const all = window.ethereum?.providers || [window.ethereum].filter(Boolean)
+    return kind === 'metamask'
+      ? all.find(p => p?.isMetaMask && !p?.isOkxWallet && !p?.isOKExWallet && !p?.isPortaldot)
+      : all.find(p => p?.isOkxWallet || p?.isOKExWallet) || (kind === 'okx' ? window.okxwallet : null)
+  }
+
+  async function connectWallet(kind) {
+    if (!kind) { setWalletPickerOpen(true); return }
     setBusy(true)
     setWalletStatus('Connecting...')
     try {
-      const provider = window.injectedWeb3?.['portaldot extension']
-      if (!provider) throw Error('Portaldot Wallet extension not detected in this browser.')
-      const extension = await provider.enable('Proof of Contribution')
-      const accounts = await extension.accounts.get()
-      if (!accounts?.length) throw Error('No wallet account available. Check website access in the wallet.')
-      const chosen = accounts.find(item => item.address.startsWith('5')) || accounts[0]
-      setAccount(chosen.address)
-      setAccountName(chosen.name || 'Portaldot Account')
+      let chosenAddress = ''
+      let chosenName = ''
+      let evmProvider = null
+      if (kind === 'portaldot') {
+        const provider = window.injectedWeb3?.['portaldot extension']
+        if (!provider) throw Error('Portaldot Wallet extension not detected in this browser.')
+        const extension = await provider.enable('Proof of Contribution')
+        const accounts = await extension.accounts.get()
+        if (!accounts?.length) throw Error('No Portaldot account available. Check website access in the wallet.')
+        const chosen = accounts.find(item => item.address.startsWith('5')) || accounts[0]
+        chosenAddress = chosen.address
+        chosenName = chosen.name || 'Portaldot Account'
+      } else {
+        evmProvider = chooseEvmProvider(kind)
+        if (!evmProvider) throw Error(`${kind === 'metamask' ? 'MetaMask' : 'OKX Wallet'} not detected. Please install or unlock the extension.`)
+        const addresses = await evmProvider.request({ method: 'eth_requestAccounts' })
+        if (!addresses?.[0]) throw Error('No EVM account selected.')
+        const currentChain = Number(BigInt(await evmProvider.request({ method: 'eth_chainId' })))
+        if (currentChain !== V3_CHAIN_ID) {
+          throw Error(`Wrong EVM network (Chain ID ${currentChain}). Switch to Portaldot V3 Testnet (Chain ID ${V3_CHAIN_ID}) in your wallet and try again.`)
+        }
+        chosenAddress = addresses[0]
+        chosenName = kind === 'metamask' ? 'MetaMask' : 'OKX Wallet'
+      }
+      selectedProvider.current = evmProvider
+      walletKindRef.current = kind
+      setWalletKind(kind)
+      setAccount(chosenAddress)
+      setAccountName(chosenName)
       setWalletStatus('Connected')
+      setWalletPickerOpen(false)
       setNotice('')
     } catch (error) {
       setWalletStatus(error?.message || 'Connection failed')
       setNotice(error?.message || 'Could not connect wallet')
+      setWalletPickerOpen(false)
     } finally { setBusy(false) }
   }
+
+  // Reflect account/network changes only for the selected EVM provider.
+  useEffect(() => {
+    const provider = selectedProvider.current
+    if (!provider?.on || !['metamask', 'okx'].includes(walletKind)) return
+    const onAccounts = (addresses) => {
+      if (walletKindRef.current !== walletKind) return
+      setAccount(addresses?.[0] || '')
+      if (!addresses?.length) setWalletStatus('Disconnected by wallet')
+    }
+    const onChain = (chainId) => {
+      if (Number(BigInt(chainId)) !== V3_CHAIN_ID) {
+        setWalletStatus('Wrong network')
+        setNotice(`Switch your wallet back to Portaldot V3 Testnet (Chain ID ${V3_CHAIN_ID}).`)
+      } else {
+        setWalletStatus('Connected')
+        setNotice('')
+      }
+    }
+    provider.on('accountsChanged', onAccounts)
+    provider.on('chainChanged', onChain)
+    return () => {
+      provider.removeListener?.('accountsChanged', onAccounts)
+      provider.removeListener?.('chainChanged', onChain)
+    }
+  }, [walletKind])
+
   function disconnect() {
-    setAccount(''); setAccountName('')
+    // DApp disconnect only; extensions retain their own connection permissions.
+    selectedProvider.current = null
+    walletKindRef.current = ''
+    setAccount(''); setAccountName(''); setWalletKind('')
     setWalletStatus('Disconnected from page')
+    setWalletPickerOpen(false)
   }
   function saveItems(items) {
     try {
@@ -112,7 +221,7 @@ export default function App() {
   }
   function submit(event) {
     event.preventDefault()
-    if (!account) return setNotice('Connect Portaldot Wallet before submitting.')
+    if (!account) return setNotice('Connect a wallet before submitting a local demo record.')
     if (!title.trim() || !description.trim() || !evidence.trim()) return setNotice('Complete all required fields.')
     let url
     try {
@@ -202,42 +311,51 @@ export default function App() {
       </aside>
       {menuOpen && <button className="ui-overlay" onClick={() => setMenuOpen(false)} aria-label="Close navigation"/>}
       <div className="ui-main">
-        <header className="ui-topbar"><div className="ui-crumb"><button className="ui-mobile-menu" onClick={() => setMenuOpen(true)} aria-label="Open navigation"><Menu size={21}/></button><span>Workspace</span><ChevronRight size={15}/><strong>{menus.find(m => m.id === page)?.label}</strong></div><div className="ui-top-actions"><span className="ui-top-chain ui-chain-logo"><img src="/portaldot-mark.png" alt="Portaldot"/> V3 TESTNET</span><button className="ui-wallet" onClick={connectWallet} disabled={busy}><Wallet size={17}/>{busy ? 'Connecting...' : account ? compact(account, 6) : 'Connect Wallet'}</button></div></header>
+        <header className="ui-topbar"><div className="ui-crumb"><button className="ui-mobile-menu" onClick={() => setMenuOpen(true)} aria-label="Open navigation"><Menu size={21}/></button><span>Workspace</span><ChevronRight size={15}/><strong>{menus.find(m => m.id === page)?.label}</strong></div><div className="ui-top-actions"><span className="ui-top-chain ui-chain-logo"><img src="/portaldot-mark.png" alt="Portaldot"/> V3 TESTNET</span><button className="ui-wallet" onClick={() => setWalletPickerOpen(true)} disabled={busy}><Wallet size={17}/>{busy ? 'Connecting...' : account ? compact(account, 6) : 'Connect Wallet'}</button></div></header>
         <main className="ui-body">
           {notice && <div className="ui-notice" role="status">{notice}<button onClick={() => setNotice('')} aria-label="Close notification"><X size={17}/></button></div>}
           {page === 'overview' && <>
-            <div className="ui-page-title"><div><span className="ui-eyebrow">YOUR WORKSPACE</span><h1>Overview</h1><p>Monitor your contributions and on-chain activity.</p></div><button className="ui-btn ui-primary" onClick={() => go('submit')}><FilePlus2 size={17}/> New contribution</button></div>
-            <div className="ui-info" style={{ justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12, marginBottom: 20 }}>
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 9 }}><Sparkles size={18}/>{showDemoPreview ? 'DEMO PREVIEW — illustrative records only. The verified example refers to a real testnet transaction.' : 'REAL DATA — records saved in this browser for your connected wallet.'}</span>
-              <button type="button" className="ui-btn ui-outline" style={{ whiteSpace: 'nowrap' }} onClick={() => setShowDemoPreview(value => !value)}>{showDemoPreview ? 'Show my real data' : 'Show demo preview'} <ArrowRight size={15}/></button>
-            </div>
-            <div className="ui-stats">{(showDemoPreview ? [
-              {label:'Demo contributions',num:DEMO_CONTRIBUTIONS.length,icon:FileCheck2},
-              {label:'Demo approved',num:2,icon:CheckCircle2},
-              {label:'Verified testnet example',num:1,icon:Fingerprint},
-              {label:'Demo pending',num:1,icon:Activity}
-            ] : [
-              {label:'My contributions',num:mine.length,icon:FileCheck2},
-              {label:'Approved locally',num:approved.length,icon:CheckCircle2},
-              {label:'On-chain proofs',num:published.length,icon:Fingerprint},
-              {label:'Pending review',num:pending.length,icon:Activity}
-            ]).map(stat => <div className="ui-stat" key={stat.label}><div><span>{stat.label}</span><stat.icon size={19}/></div><strong>{String(stat.num).padStart(2, '0')}</strong><small>{showDemoPreview ? 'Demo / example — not your data' : 'Current browser / connected wallet'}</small></div>)}</div>
-            <div className="ui-overview-grid"><section className="ui-panel"><div className="ui-panel-head"><div><h2>{showDemoPreview ? 'Sample contributions' : 'Recent contributions'}</h2><p>{showDemoPreview ? 'Illustrative showcase records, not real approvals' : 'Your latest records'}</p></div>{!showDemoPreview && <button className="ui-link-button" onClick={() => go('proofs')}>View all <ArrowRight size={15}/></button>}</div>{showDemoPreview ? <div className="ui-recent-list">{DEMO_CONTRIBUTIONS.map(item => <div className="ui-recent" key={item.id}><span className="ui-record-icon"><FileCheck2 size={19}/></span><div><strong>{item.title}</strong><small>{item.category} · {item.date}{item.isSample ? ' · real tx example' : ' · demo only'}</small></div><Status value={item.status}/></div>)}</div> : !account ? <div className="ui-empty"><Wallet size={26}/><h3>Connect your wallet</h3><p>Contributions appear after connecting your Portaldot account.</p></div> : mine.length === 0 ? <div className="ui-empty"><FilePlus2 size={26}/><h3>No contributions yet</h3><p>Start by submitting your first contribution.</p></div> : <div className="ui-recent-list">{mine.slice(0,5).map(item => <div className="ui-recent" key={item.id}><span className="ui-record-icon"><FileCheck2 size={19}/></span><div><strong>{item.title}</strong><small>{item.category} · {new Date(item.createdAt).toLocaleDateString()}</small></div><Status value={item.status}/></div>)}</div>}</section><section className="ui-panel"><div className="ui-panel-head"><div><h2>Quick actions</h2><p>Continue your workflow</p></div></div><div className="ui-actions-list">{[{id:'submit',icon:FilePlus2,title:'Submit contribution',subtitle:'Add evidence for review'},{id:'review',icon:ShieldCheck,title:'Review queue',subtitle:'Approve demo submissions'},{id:'verify',icon:Search,title:'Verify on-chain',subtitle:'Validate published proofs'}].map(action => <button key={action.id} onClick={() => go(action.id)}><span className="ui-action-icon"><action.icon size={19}/></span><span><strong>{action.title}</strong><small>{action.subtitle}</small></span><ArrowRight size={17}/></button>)}</div></section></div>
-            <div className="ui-testnet-banner"><div><span><i/> VERIFIED TESTNET EXAMPLE</span><h3>Proof recorded in block #{SAMPLE.block}</h3><p>Explore independent verification using a finalized Portaldot V3 transaction.</p></div><button className="ui-btn ui-outline" onClick={() => go('verify')}>Open verifier <ArrowRight size={16}/></button></div>
+            <div className="ui-page-title"><div><span className="ui-eyebrow">LIVE PORTALDOT V3 TESTNET</span><h1>Overview</h1><p>Verified contribution activity from the deployed EVM registry.</p></div><button className="ui-btn ui-primary" onClick={() => go('submit')}><FilePlus2 size={17}/> New contribution</button></div>
+            <ModeSwitch mode={showDemoPreview ? 'demo' : 'onchain'} setMode={mode => setShowDemoPreview(mode === 'demo')}/>
+            {showDemoPreview ? <section className="ui-panel"><div className="ui-panel-head"><div><h2>Demo preview</h2><p>Illustrative entries only. These are not registry transactions.</p></div></div><div className="ui-recent-list" style={{padding:20}}>{DEMO_CONTRIBUTIONS.map(item => <div className="ui-recent" key={item.id}><span className="ui-record-icon"><FileCheck2 size={19}/></span><div><strong>{item.title}</strong><small>{item.category} · example only</small></div><Status value={item.status}/></div>)}</div></section> : <EvmOverview onSubmit={() => go('submit')} onExplore={() => go('explore')} onVerify={() => go('verify')}/>}
           </>}
-          {page === 'submit' && <><div className="ui-page-title"><div><span className="ui-eyebrow">STEP 01 · SUBMIT</span><h1>New contribution</h1><p>Describe your work and provide evidence.</p></div></div><section className="ui-panel ui-form-panel"><div className="ui-panel-head"><div><h2>Contribution details</h2><p>Fields marked * are required.</p></div><FilePlus2 size={21}/></div><form className="ui-form" onSubmit={submit}><label htmlFor="title">Contribution title *</label><input id="title" value={title} onChange={e => setTitle(e.target.value)} placeholder="e.g. Portaldot V3 Beginner Guide" maxLength={120} required/><label htmlFor="category">Category *</label><select id="category" value={category} onChange={e => setCategory(e.target.value)}><option>Community</option><option>Education</option><option>Development</option><option>Content</option><option>Other</option></select><label htmlFor="description">Description *</label><textarea id="description" value={description} onChange={e => setDescription(e.target.value)} placeholder="Describe your contribution..." rows={5} maxLength={2000} required/><label htmlFor="evidence">Evidence URL *</label><input id="evidence" type="url" value={evidence} onChange={e => setEvidence(e.target.value)} placeholder="https://..." required/><p className="ui-help">This submission is saved locally. Publishing on-chain happens after demo approval.</p><button className="ui-btn ui-primary" type="submit"><Send size={16}/> Submit Contribution</button></form></section></>}
-          {page === 'review' && <><div className="ui-page-title"><div><span className="ui-eyebrow">STEP 02 · REVIEW</span><h1>Review queue</h1><p>Evaluate the evidence provided by contributors.</p></div><span className="ui-count">{pending.length} pending</span></div><div className="ui-info"><ShieldCheck size={20}/> Demo reviewer mode: any connected wallet can approve local records. Reviewer authorization is not yet implemented.</div><section className="ui-panel"><div className="ui-panel-head"><div><h2>Pending submissions</h2><p>Awaiting a demo review decision</p></div></div>{pending.length === 0 ? <div className="ui-empty"><CheckCircle2 size={26}/><h3>All caught up</h3><p>No contributions are currently awaiting review.</p></div> : <div className="ui-record-list">{pending.map(item => <article className="ui-record" key={item.id}><div className="ui-record-head"><span className="ui-record-icon"><FileCheck2 size={20}/></span><div><h3>{item.title}</h3><small>{item.category} · {compact(item.contributor, 12)}</small></div><Status value={item.status}/></div><p>{item.description}</p><div className="ui-record-bottom"><a href={item.evidence} target="_blank" rel="noopener noreferrer">Review evidence <ExternalLink size={14}/></a><div><button className="ui-btn ui-danger" disabled={!account} onClick={() => review(item.id, 'Rejected')}><XCircle size={16}/> Reject</button><button className="ui-btn ui-success" disabled={!account} onClick={() => review(item.id, 'Approved')}><CheckCircle2 size={16}/> Approve</button></div></div></article>)}</div>}</section></>}
-          {page === 'proofs' && <><div className="ui-page-title"><div><span className="ui-eyebrow">CONTRIBUTION HISTORY</span><h1>My Proofs</h1><p>Track review status and publish approved proof hashes.</p></div><button className="ui-btn ui-primary" onClick={() => go('submit')}><FilePlus2 size={16}/> New contribution</button></div><section className="ui-panel"><div className="ui-panel-head"><div><h2>Contribution records</h2><p>Stored in this browser for your wallet address</p></div><span className="ui-count">{mine.length} records</span></div>{!account ? <div className="ui-empty"><Wallet size={26}/><h3>Wallet not connected</h3><p>Connect your wallet to view your records.</p></div> : mine.length === 0 ? <div className="ui-empty"><FilePlus2 size={26}/><h3>No records</h3><p>Submit a contribution to start your history.</p></div> : <div className="ui-record-list">{mine.map(item => <article className="ui-record" key={item.id}><div className="ui-record-head"><span className="ui-record-icon"><FileCheck2 size={20}/></span><div><h3>{item.title}</h3><small>{item.category} · {new Date(item.createdAt).toLocaleDateString()}</small></div><Status value={item.status}/></div><p>{item.description}</p><div className="ui-record-bottom"><a href={item.evidence} target="_blank" rel="noopener noreferrer">Evidence <ExternalLink size={14}/></a><button className="ui-link-button" onClick={() => copy(item.id)}><Copy size={14}/> Copy record ID</button></div>{storedProofs[item.id] && <div className="ui-onchain-proof-panel">
+          {page === 'submit' && <><div className="ui-page-title"><div><span className="ui-eyebrow">STEP 01 · SUBMIT</span><h1>New contribution</h1><p>Describe your work and provide evidence.</p></div></div><ModeSwitch mode={submitMode} setMode={setSubmitMode}/>{submitMode === 'demo' && <section className="ui-panel ui-form-panel"><div className="ui-panel-head"><div><h2>Contribution details</h2><p>Fields marked * are required.</p></div><FilePlus2 size={21}/></div><form className="ui-form" onSubmit={submit}><label htmlFor="title">Contribution title *</label><input id="title" value={title} onChange={e => setTitle(e.target.value)} placeholder="e.g. Portaldot V3 Beginner Guide" maxLength={120} required/><label htmlFor="category">Category *</label><select id="category" value={category} onChange={e => setCategory(e.target.value)}><option>Community</option><option>Education</option><option>Development</option><option>Content</option><option>Other</option></select><label htmlFor="description">Description *</label><textarea id="description" value={description} onChange={e => setDescription(e.target.value)} placeholder="Describe your contribution..." rows={5} maxLength={2000} required/><label htmlFor="evidence">Evidence URL *</label><input id="evidence" type="url" value={evidence} onChange={e => setEvidence(e.target.value)} placeholder="https://..." required/><p className="ui-help">This submission is saved locally. Publishing on-chain happens after demo approval.</p><button className="ui-btn ui-primary" type="submit"><Send size={16}/> Submit Contribution</button></form></section>}{submitMode === 'onchain' && <EvmSubmitPanel provider={selectedProvider.current} account={account} walletKind={walletKind}/>}</>}
+          {page === 'review' && <><div className="ui-page-title"><div><span className="ui-eyebrow">STEP 02 · REVIEW</span><h1>Review queue</h1><p>Evaluate the evidence provided by contributors.</p></div></div><ModeSwitch mode={reviewMode} setMode={setReviewMode}/>{reviewMode === 'demo' && <><div className="ui-info"><ShieldCheck size={20}/> Demo reviewer mode: any connected wallet can approve local records. Reviewer authorization is not yet implemented.</div><section className="ui-panel"><div className="ui-panel-head"><div><h2>Pending submissions</h2><p>Awaiting a demo review decision</p></div></div>{pending.length === 0 ? <div className="ui-empty"><CheckCircle2 size={26}/><h3>All caught up</h3><p>No contributions are currently awaiting review.</p></div> : <div className="ui-record-list">{pending.map(item => <article className="ui-record" key={item.id}><div className="ui-record-head"><span className="ui-record-icon"><FileCheck2 size={20}/></span><div><h3>{item.title}</h3><small>{item.category} · {compact(item.contributor, 12)}</small></div><Status value={item.status}/></div><p>{item.description}</p><div className="ui-record-bottom"><a href={item.evidence} target="_blank" rel="noopener noreferrer">Review evidence <ExternalLink size={14}/></a><div><button className="ui-btn ui-danger" disabled={!account} onClick={() => review(item.id, 'Rejected')}><XCircle size={16}/> Reject</button><button className="ui-btn ui-success" disabled={!account} onClick={() => review(item.id, 'Approved')}><CheckCircle2 size={16}/> Approve</button></div></div></article>)}</div>}</section></>}{reviewMode === 'onchain' && <EvmReviewPanel provider={selectedProvider.current} account={account} walletKind={walletKind}/>} </>}
+          {page === 'proofs' && <><div className="ui-page-title"><div><span className="ui-eyebrow">CONTRIBUTION HISTORY</span><h1>My Proofs</h1><p>Track review status and publish approved proof hashes.</p></div><button className="ui-btn ui-primary" onClick={() => go('submit')}><FilePlus2 size={16}/> New contribution</button></div><ModeSwitch mode={proofMode} setMode={setProofMode}/>{proofMode === 'demo' && <section className="ui-panel"><div className="ui-panel-head"><div><h2>Contribution records</h2><p>Stored in this browser for your wallet address</p></div><span className="ui-count">{mine.length} records</span></div>{!account ? <div className="ui-empty"><Wallet size={26}/><h3>Wallet not connected</h3><p>Connect your wallet to view your records.</p></div> : mine.length === 0 ? <div className="ui-empty"><FilePlus2 size={26}/><h3>No records</h3><p>Submit a contribution to start your history.</p></div> : <div className="ui-record-list">{mine.map(item => <article className="ui-record" key={item.id}><div className="ui-record-head"><span className="ui-record-icon"><FileCheck2 size={20}/></span><div><h3>{item.title}</h3><small>{item.category} · {new Date(item.createdAt).toLocaleDateString()}</small></div><Status value={item.status}/></div><p>{item.description}</p><div className="ui-record-bottom"><a href={item.evidence} target="_blank" rel="noopener noreferrer">Evidence <ExternalLink size={14}/></a><button className="ui-link-button" onClick={() => copy(item.id)}><Copy size={14}/> Copy record ID</button></div>{storedProofs[item.id] && <div className="ui-onchain-proof-panel">
   <div className="ui-onchain-proof-head"><CheckCircle2 size={17}/><strong>Published on Portaldot V3</strong><span>On-chain</span></div>
   <p>Transaction: <code>{compact(storedProofs[item.id].txHash, 18)}</code></p>
   <div className="ui-onchain-proof-actions"><button type="button" className="ui-btn ui-primary" onClick={() => sharePublishedProof(storedProofs[item.id])}><Share2 size={16}/> Share Proof</button><button type="button" className="ui-btn ui-outline" onClick={() => go('verify')}><Search size={16}/> Verify on-chain</button></div>
-</div>}</article>)}</div>}</section><div className="ui-integrated"><PublishProof account={account} contributions={contributions}/></div></>}
-          {page === 'explore' && <ExploreProofs onVerify={() => go('verify')} />}
-          {page === 'verify' && <><div className="ui-page-title"><div><span className="ui-eyebrow">TRUST, BUT VERIFY</span><h1>Verify proof</h1><p>Check a contribution proof against Portaldot V3 blockchain data.</p></div></div><div className="ui-info"><ShieldCheck size={20}/> Verification checks transaction inclusion and successful execution, not the quality of a contribution or the reviewer's authority.</div><ShareProof account={account} contributions={contributions}/><div className="ui-integrated"><VerifyOnChain/></div><section className="ui-panel ui-local"><div className="ui-panel-head"><div><h2>Local record lookup</h2><p>Optional browser-only demo status check</p></div></div><form className="ui-form" onSubmit={localVerify}><label htmlFor="local-id">Local record ID</label><input id="local-id" value={localId} onChange={e => setLocalId(e.target.value)} placeholder="Paste record ID" required/><button className="ui-btn ui-outline" type="submit"><Search size={16}/> Check local status</button></form>{localResult && <p className="ui-help">{localResult}</p>}</section></>}
-          {page === 'network' && <><div className="ui-page-title"><div><span className="ui-eyebrow">LIVE INFRASTRUCTURE</span><h1>Network status</h1><p>Read-only blockchain data from Portaldot V3 Testnet.</p></div></div><section className="ui-panel"><div className="ui-panel-head"><div><h2>Wallet connection</h2><p>Portaldot native extension</p></div><Wallet size={21}/></div><div className="ui-wallet-info"><div><span>Account</span><strong>{accountName || 'Not connected'}</strong></div><div><span>Address</span><strong>{account || '—'}</strong></div><div><span>Status</span><strong>{walletStatus}</strong></div></div><div className="ui-wallet-actions">{account ? <><button className="ui-btn ui-outline" onClick={() => copy(account)}><Copy size={15}/> Copy address</button><button className="ui-btn ui-text" onClick={disconnect}>Disconnect</button></> : <button className="ui-btn ui-primary" onClick={connectWallet} disabled={busy}><Wallet size={16}/> Connect wallet</button>}</div></section><div className="ui-integrated"><BlockchainStatus account={account}/></div></>}
+</div>}</article>)}</div>}</section>}{proofMode === 'demo' && <div className="ui-integrated"><PublishProof account={walletKind === 'portaldot' ? account : ''} contributions={contributions}/></div>}{proofMode === 'onchain' && <EvmRegistryList mine account={account} walletKind={walletKind} onConnectWallet={() => setWalletPickerOpen(true)} onExplore={() => go('explore')} onVerify={row => { window.history.replaceState(null, '', `?contribution=${row.id}&evidence=${encodeURIComponent(row.evidenceURI || '')}`); go('verify') }}/>} </>}
+          {page === 'explore' && <><div className="ui-page-title"><div><span className="ui-eyebrow">PUBLIC REGISTRY</span><h1>Explore Proofs</h1><p>Browse public records from Portaldot V3.</p></div></div><ModeSwitch mode={exploreMode} setMode={setExploreMode}/>{exploreMode === 'onchain' ? <EvmRegistryList account={account} walletKind={walletKind} onVerify={row => { window.history.replaceState(null, '', `?contribution=${row.id}&evidence=${encodeURIComponent(row.evidenceURI || '')}`); go('verify') }}/> : <ExploreProofs onVerify={() => go('verify')}/>}</>}
+          {page === 'verify' && <><div className="ui-page-title"><div><span className="ui-eyebrow">TRUST, BUT VERIFY</span><h1>Verify proof</h1><p>Check a contribution proof against Portaldot V3 blockchain data.</p></div></div><ModeSwitch mode={verifyMode} setMode={setVerifyMode} options={[['evm','EVM Registry'],['native','Native Proof'],['demo','Local demo']]}/>{verifyMode === 'native' && <><div className="ui-info"><ShieldCheck size={20}/> Verification checks transaction inclusion and successful execution, not the quality of a contribution or the reviewer's authority.</div><ShareProof account={walletKind === 'portaldot' ? account : ''} contributions={contributions}/><div className="ui-integrated"><VerifyOnChain/></div></>}{verifyMode === 'evm' && <EvmVerifyPanel key={window.location.search.includes("contribution=") ? window.location.search : "default"}/>}{verifyMode === 'demo' && <section className="ui-panel ui-local"><div className="ui-panel-head"><div><h2>Local record lookup</h2><p>Optional browser-only demo status check</p></div></div><form className="ui-form" onSubmit={localVerify}><label htmlFor="local-id">Local record ID</label><input id="local-id" value={localId} onChange={e => setLocalId(e.target.value)} placeholder="Paste record ID" required/><button className="ui-btn ui-outline" type="submit"><Search size={16}/> Check local status</button></form>{localResult && <p className="ui-help">{localResult}</p>}</section>}</>}
+          {page === 'network' && <><div className="ui-page-title"><div><span className="ui-eyebrow">LIVE INFRASTRUCTURE</span><h1>Network status</h1><p>Read-only blockchain data from Portaldot V3 Testnet.</p></div></div><section className="ui-panel"><div className="ui-panel-head"><div><h2>Wallet connection</h2><p>Portaldot native extension or EVM wallet</p></div><Wallet size={21}/></div><div className="ui-wallet-info"><div><span>Account</span><strong>{accountName || 'Not connected'}</strong></div><div><span>Address</span><strong>{account || '—'}</strong></div><div><span>Wallet type</span><strong>{walletKind || '—'}</strong></div><div><span>Status</span><strong>{walletStatus}</strong></div></div><div className="ui-wallet-actions">{account ? <><button className="ui-btn ui-outline" onClick={() => copy(account)}><Copy size={15}/> Copy address</button><button className="ui-btn ui-text" onClick={disconnect}>Disconnect</button></> : <button className="ui-btn ui-primary" onClick={() => setWalletPickerOpen(true)} disabled={busy}><Wallet size={16}/> Connect wallet</button>}</div></section><div className="ui-integrated"><BlockchainStatus account={walletKind === 'portaldot' ? account : ''}/></div></>}
+          {page === 'admin' && <><div className="ui-page-title"><div><span className="ui-eyebrow">ON-CHAIN ACCESS CONTROL</span><h1>Admin Panel</h1><p>Manage authorized EVM reviewers on Portaldot V3 Testnet.</p></div></div><EvmAdminPanel provider={selectedProvider.current} account={account} walletKind={walletKind}/></>}
           <footer className="ui-app-footer"><span>Proof of Contribution · Portaldot Hacker House 2026</span><span>Testnet MVP</span></footer>
         </main>
       </div>
+      {walletPickerOpen && (
+        <div role="presentation" onMouseDown={e => { if (e.target === e.currentTarget) setWalletPickerOpen(false) }} style={{ position: 'fixed', inset: 0, zIndex: 9999, background: 'rgba(0,0,0,.72)', display: 'grid', placeItems: 'center', padding: 18 }}>
+          <section role="dialog" aria-modal="true" aria-label="Choose wallet" style={{ width: 'min(440px, 100%)', padding: 24, borderRadius: 18, border: '1px solid #403760', background: '#141b2e', color: '#f5f4ff', boxShadow: '0 20px 65px rgba(0,0,0,.5)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+              <h2 style={{ fontSize: 21, margin: 0 }}>Connect Wallet</h2>
+              <button type="button" onClick={() => setWalletPickerOpen(false)} aria-label="Close wallet selection" style={{ color: 'white', border: 0, background: 'transparent', cursor: 'pointer' }}><X size={21}/></button>
+            </div>
+            {[
+              { id: 'portaldot', label: 'Portaldot Wallet', desc: 'Substrate · Native proof', img: '/wallets/portaldot.png' },
+              { id: 'metamask', label: 'MetaMask', desc: 'EVM · Portaldot V3', img: '/wallets/metamask.png' },
+              { id: 'okx', label: 'OKX Wallet', desc: 'EVM · Portaldot V3', img: '/wallets/okx.png' }
+            ].map(option => (
+              <button type="button" key={option.id} disabled={busy} onClick={() => connectWallet(option.id)} style={{ display: 'flex', width: '100%', gap: 14, alignItems: 'center', padding: 14, marginBottom: 10, borderRadius: 12, border: '1px solid #3e4764', background: '#202a43', color: 'white', cursor: busy ? 'wait' : 'pointer', textAlign: 'left' }}>
+                {option.img ? <img src={option.img} alt="" style={{ width: 40, height: 40, objectFit: 'contain', borderRadius: 9 }} /> : <span aria-hidden="true" style={{ display: 'grid', placeItems: 'center', width: 40, height: 40, borderRadius: 9, background: option.id === 'metamask' ? '#db834c' : '#333', fontWeight: 700, fontSize: 15 }}>{option.id === 'metamask' ? 'M' : 'OKX'}</span>}
+                <span style={{ flex: 1 }}><strong style={{ display: 'block', marginBottom: 4 }}>{option.label}</strong><small style={{ opacity: .72 }}>{option.desc}</small></span>
+                <ChevronRight size={18}/>
+              </button>
+            ))}
+            {account && <button type="button" onClick={disconnect} style={{ marginTop: 4, padding: 10, background: 'transparent', border: '1px solid #4a5572', borderRadius: 9, color: '#f5f4ff', cursor: 'pointer' }}>Disconnect current wallet</button>}
+            <p style={{ fontSize: 12, opacity: .75, marginBottom: 0, lineHeight: 1.5 }}>EVM on-chain submission is available on the Submit page. The original Submit form and Review queue remain local demos; native proof publishing requires Portaldot Wallet.</p>
+          </section>
+        </div>
+      )}
     </div>
   )
 }

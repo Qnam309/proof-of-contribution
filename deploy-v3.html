@@ -1,0 +1,101 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PoC - Deploy V3 Testnet</title>
+  <style>
+    body {
+      margin: 0;
+      background: #0b1020;
+      color: #f2f5ff;
+      font-family: Arial, sans-serif;
+      padding: 35px 18px;
+    }
+    main { max-width: 680px; margin: auto; }
+    h1 { font-size: 25px; }
+    section {
+      background: #161e32;
+      border: 1px solid #35415e;
+      border-radius: 12px;
+      padding: 20px;
+      margin: 16px 0;
+    }
+    button {
+      background: #7857ed;
+      color: white;
+      border: 0;
+      border-radius: 8px;
+      padding: 12px 17px;
+      cursor: pointer;
+      font-weight: bold;
+      margin-top: 8px;
+    }
+    button:disabled {
+      opacity: .45;
+      cursor: not-allowed;
+    }
+    p { line-height: 1.65; }
+    pre {
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      background: #090e1b;
+      padding: 14px;
+      border-radius: 8px;
+      font-size: 13px;
+    }
+    .warning { color: #ffd38c; }
+    .success { color: #80e0b1; }
+    #wallet, #result { overflow-wrap: anywhere; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>PoC — Portaldot V3 Deploy</h1>
+    <p class="warning">
+      TESTNET ONLY. Deploying may consume a large amount
+      of tPOT. Review MetaMask's confirmation carefully.
+    </p>
+
+    <section>
+      <h3>1. Connect MetaMask</h3>
+      <p>Network: Portaldot V3 EVM Testnet</p>
+      <p>Chain ID: 420420777</p>
+      <button id="connect">Connect MetaMask</button>
+      <pre id="wallet">Not connected</pre>
+    </section>
+
+    <section>
+      <h3>2. Estimate deployment cost</h3>
+      <p>Contract: ContributionRegistry</p>
+      <button id="estimate" disabled>Check gas</button>
+      <pre id="cost">Not estimated</pre>
+    </section>
+
+    <section>
+      <h3>3. Deploy contract</h3>
+      <p class="warning">
+        This sends a real testnet transaction.
+        It cannot be undone after confirmation.
+      </p>
+      <label>
+        <input type="checkbox" id="agree" />
+        I understand that testnet POT may be spent.
+      </label>
+      <p>
+        <button id="deploy" disabled>
+          Deploy ContributionRegistry
+        </button>
+      </p>
+    </section>
+
+    <section>
+      <h3>4. Transaction result</h3>
+      <pre id="result">No transaction sent.</pre>
+    </section>
+  </main>
+
+  <script type="module" src="/src/deploy-v3.js"></script>
+</body>
+</html>

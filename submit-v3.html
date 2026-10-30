@@ -1,0 +1,103 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PoC — Submit on V3</title>
+  <style>
+    body {
+      background: #0b1020;
+      color: #f2f5ff;
+      font: 15px Arial, sans-serif;
+      padding: 28px 16px;
+    }
+    main { max-width: 680px; margin: auto; }
+    section {
+      background: #161e32;
+      border: 1px solid #35415e;
+      border-radius: 12px;
+      padding: 20px;
+      margin: 16px 0;
+    }
+    input, textarea {
+      box-sizing: border-box;
+      display: block;
+      width: 100%;
+      padding: 12px;
+      margin: 10px 0;
+      border-radius: 8px;
+      border: 1px solid #52617e;
+      background: #0a1121;
+      color: white;
+    }
+    button {
+      background: #7857ed;
+      color: white;
+      border: 0;
+      border-radius: 8px;
+      padding: 12px 16px;
+      margin: 8px 0;
+      cursor: pointer;
+    }
+    button:disabled { opacity: .45; }
+    pre {
+      background: #090e1b;
+      padding: 15px;
+      border-radius: 8px;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+    .warning { color: #ffd38c; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>PoC — Submit on Portaldot V3</h1>
+  <p class="warning">
+    TESTNET ONLY. Transactions can consume tPOT.
+  </p>
+
+  <section>
+    <h3>1. Connect MetaMask</h3>
+    <button id="connect">Connect MetaMask</button>
+    <pre id="wallet">Not connected</pre>
+  </section>
+
+  <section>
+    <h3>2. Contribution details</h3>
+    <label>Evidence URI</label>
+    <input id="evidence"
+      placeholder="https://github.com/... or https://..." />
+
+    <p>
+      For this first test, the SHA-256 hash will be
+      calculated from the exact Evidence URI text.
+    </p>
+    <button id="estimate" disabled>Check submit gas</button>
+    <pre id="preview">Not checked</pre>
+  </section>
+
+  <section>
+    <h3>3. Submit on-chain</h3>
+    <label>
+      <input type="checkbox" id="agree"
+        style="display:inline;width:auto" />
+      I agree to send a testnet transaction.
+    </label>
+    <p>
+      <button id="submit" disabled>
+        Submit Contribution
+      </button>
+    </p>
+  </section>
+
+  <section>
+    <h3>4. Result</h3>
+    <pre id="result">No transaction sent.</pre>
+  </section>
+</main>
+
+<script type="module" src="/src/submit-v3.js"></script>
+</body>
+</html>

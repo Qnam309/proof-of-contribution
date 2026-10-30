@@ -1,0 +1,75 @@
+/* Unified design system – layout only; blockchain functionality is unchanged. */
+.ui-app .ui-main {min-width:0; width:100%;}
+.ui-app .ui-body {width:min(100%,1152px); max-width:1152px; box-sizing:border-box; margin-inline:auto; padding-inline:clamp(16px,2.2vw,28px);}
+.ui-app .ui-body > *, .ui-app .ui-body > section, .ui-app .ui-body > div {max-width:100%; box-sizing:border-box;}
+.ui-app .ui-page-title, .ui-app .ui-info, .ui-app .ui-panel, .ui-app .ui-integrated, .poc-admin-stack {width:100%; max-width:100%; box-sizing:border-box;}
+.ui-app .ui-form, .ui-app .ui-form-panel {min-width:0;}
+.ui-app .ui-form input:not([type="checkbox"]), .ui-app .ui-form textarea, .ui-app .ui-form select, .ui-app .ui-form button, .ui-app .ui-form pre {max-width:100%; box-sizing:border-box;}
+.ui-app .ui-panel {margin-top:18px;}
+.ui-app .ui-overview-grid {grid-template-columns:repeat(2,minmax(0,1fr)); gap:20px;}
+.ui-app .ui-stats {grid-template-columns:repeat(4,minmax(0,1fr)); gap:16px;}
+.ui-app .ui-record, .ui-app .ui-recent {min-width:0;}
+.ui-app .ui-record p,.ui-app .ui-record small,.ui-app .ui-wallet-info strong {overflow-wrap:anywhere;}
+.poc-mode-switch {display:flex;gap:6px;padding:5px;background:rgba(105,119,170,.12);border:1px solid rgba(130,144,200,.22);border-radius:13px;width:100%;margin:4px 0 20px;box-sizing:border-box;}
+.poc-mode-switch button {flex:1;min-width:0;min-height:43px;background:transparent;border:0;border-radius:9px;color:#aebbd4;font-weight:650;cursor:pointer;}
+.poc-mode-switch button.active {background:linear-gradient(115deg,#6950d7,#4e68cd);color:white;box-shadow:0 3px 12px rgba(63,43,148,.24);}
+.poc-overview {display:grid;gap:20px;width:100%;}
+.poc-dashboard-actions {display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;}
+.poc-live-tag {font-size:13px;color:#a9b8d2;letter-spacing:.025em;}
+.poc-kpi-grid {display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px;}
+.poc-kpi {border:1px solid rgba(128,144,200,.22);background:rgba(26,33,57,.8);border-radius:14px;padding:20px;min-width:0;min-height:150px;box-sizing:border-box;display:flex;flex-direction:column;gap:12px;}
+.poc-kpi-label {display:flex;justify-content:space-between;gap:8px;color:#acbad4;font-size:13px;align-items:center;}
+.poc-kpi strong {font-size:32px;color:#fff;line-height:1.15;}
+.poc-kpi small,.poc-footnote {font-size:12px;color:#9baac6;line-height:1.65;}
+.poc-panel-unified {margin:0!important; overflow:hidden;}
+.poc-panel-unified .ui-panel-head {display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;}
+.poc-recent-row {display:flex;justify-content:space-between;align-items:center;gap:14px;padding:16px 22px;border-top:1px solid rgba(140,153,199,.12);}
+.poc-recent-row > div {display:grid;gap:5px;min-width:0;}
+.poc-recent-row small {color:#a7b4ce;overflow-wrap:anywhere;}
+.poc-status-chip {display:inline-flex;align-items:center;justify-content:center;border:1px solid rgba(154,167,211,.3);border-radius:100px;padding:5px 11px;white-space:nowrap;font-size:12px;color:#d4ddf3;}
+.poc-status-chip.is-authorized {color:#8ce4ba;border-color:rgba(84,206,146,.4);}
+.poc-panel-actions {display:flex;gap:12px;padding:18px 22px;flex-wrap:wrap;border-top:1px solid rgba(140,153,199,.12);}
+.poc-panel-message,.poc-admin-content {padding:20px;}
+.poc-error {padding:12px 16px;background:rgba(170,61,70,.12);color:#ffc9c9;border-radius:10px;overflow-wrap:anywhere;}
+.poc-admin-stack {display:grid;gap:20px;}
+.poc-admin-stack .ui-form.poc-admin-content {padding:20px;}
+.poc-reviewer-row {display:flex;align-items:center;gap:14px;border-top:1px solid rgba(140,153,199,.15);padding:14px 0;flex-wrap:wrap;}
+.poc-reviewer-identity {display:grid;gap:6px;flex:1;min-width:180px;}
+.poc-reviewer-identity small {overflow-wrap:anywhere;color:#a9b8d2;}
+.poc-admin-output {white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;line-height:1.7;width:100%;box-sizing:border-box;}
+.poc-admin-agreement {display:flex;align-items:flex-start;gap:10px;line-height:1.5;}
+.poc-admin-agreement input {width:auto!important;margin-top:4px;}
+@media(max-width:1000px){.poc-kpi-grid{grid-template-columns:repeat(2,minmax(0,1fr));}}
+@media(max-width:760px){.ui-app .ui-body{padding-inline:14px;}.ui-app .ui-overview-grid,.ui-app .ui-stats,.poc-kpi-grid{grid-template-columns:1fr 1fr;}.poc-recent-row{align-items:flex-start;}.poc-status-chip{font-size:11px;}}
+@media(max-width:460px){.ui-app .ui-overview-grid,.ui-app .ui-stats,.poc-kpi-grid{grid-template-columns:1fr;}.poc-kpi{min-height:120px;}.poc-mode-switch button{font-size:12px;}.poc-recent-row{flex-direction:column;}.poc-panel-actions .ui-btn{width:100%;justify-content:center;}}
+
+/* Distinct destructive action: red Revoke button in Authorized Reviewers. */
+.ui-app .poc-reviewer-row .poc-revoke-danger {
+  color:#ffffff; background:#c62838; border:1px solid #e04b58;
+  border-radius:10px; font-weight:700; min-width:92px;
+  transition:background .15s ease,box-shadow .15s ease;
+}
+.ui-app .poc-reviewer-row .poc-revoke-danger:hover:not(:disabled) {
+  background:#a91e2e; border-color:#f36a74; box-shadow:0 0 0 2px rgba(224,75,88,.2);
+}
+.ui-app .poc-reviewer-row .poc-revoke-danger:disabled {
+  opacity:.45; cursor:not-allowed;
+}
+
+/* Finishing pass: uniform content edges, accessible compact subpanels. */
+.poc-revoked-history {border-top:1px solid rgba(140,153,199,.18); padding-top:16px; display:grid;gap:10px}
+.poc-wallet-empty {border:1px solid rgba(130,144,200,.28);border-radius:14px;background:rgba(40,50,80,.3);padding:20px;display:grid;gap:10px;box-sizing:border-box;width:100%}
+.poc-wallet-empty p {margin:0;color:#aebbd4;line-height:1.6}
+.poc-wallet-empty .poc-panel-actions {padding:0;border:0}
+.poc-filter-row {display:grid;grid-template-columns:minmax(0,1fr) 200px;gap:12px;max-width:100%;}
+.poc-filter-row input,.poc-filter-row select {min-width:0;width:100%;box-sizing:border-box}
+.poc-timeline {display:flex;flex-wrap:wrap;gap:8px;margin:12px 0}
+.poc-timeline span {border-radius:22px;border:1px solid rgba(140,153,199,.24);padding:5px 9px;color:#9aa9c6;font-size:12px}
+.poc-timeline span.done {border-color:rgba(84,206,146,.35);color:#8ce4ba}
+.poc-inline-actions {display:flex;flex-wrap:wrap;gap:10px;margin-top:10px}
+.poc-queue-block {border:1px solid rgba(140,153,199,.2);border-radius:12px;padding:16px;display:grid;gap:10px;min-width:0}
+.poc-queue-header,.poc-queue-item {display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.poc-queue-item {border-top:1px solid rgba(140,153,199,.16);padding:12px 0}
+.poc-queue-item>div {min-width:0;flex:1;display:grid;gap:5px}
+.poc-queue-item small {color:#aebbd4;overflow-wrap:anywhere}
+@media(max-width:650px){.poc-filter-row{grid-template-columns:1fr}.poc-inline-actions .ui-btn{width:100%;justify-content:center}}
