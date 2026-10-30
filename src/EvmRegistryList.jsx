@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react'
-import { registryClient as client, registryAbi as abi, registryAddress as contract, statusName } from './EvmRegistryShared'
+import { registryClient as client, registryAbi as abi, registryAddress as contract, statusName, parseProofEvidence, resolveProofEvidence } from './EvmRegistryShared'
 
 const PAGE_SIZE = 15n
 const short = (s) => s ? `${s.slice(0, 10)}…${s.slice(-6)}` : '—'
 
 export default function EvmRegistryList({ account, walletKind, mine = false, onVerify, onExplore, onConnectWallet }) {
   const [rows, setRows] = useState([])
+  const [metadataMap, setMetadataMap] = useState({})
   const [cursor, setCursor] = useState(null)
   const [latest, setLatest] = useState(null)
   const [loading, setLoading] = useState(false)
@@ -18,7 +19,7 @@ export default function EvmRegistryList({ account, walletKind, mine = false, onV
   const canFilter = !!account && ['metamask', 'okx'].includes(walletKind)
 
   useEffect(() => {
-    setRows([]); setCursor(null); setLatest(null); setError(''); setScanned(0)
+    setRows([]); setMetadataMap({}); setCursor(null); setLatest(null); setError(''); setScanned(0)
   }, [account, walletKind, mine])
 
   async function loadMore(reset = false) {
@@ -46,6 +47,13 @@ export default function EvmRegistryList({ account, walletKind, mine = false, onV
       }))
       const visible = found.filter(item => !filtered || (item.contributor && item.contributor.toLowerCase() === account.toLowerCase()))
       setRows(previous => reset ? visible : [...previous, ...visible])
+      if (reset) setMetadataMap({})
+      // Fetch external metadata asynchronously: a broken remote URL never masquerades as verified.
+      visible.filter(item => !item.readError && item.evidenceURI?.startsWith('poc:ext:v1:')).forEach(item => {
+        resolveProofEvidence(item.evidenceURI, item.contentHash)
+          .then(metadata => setMetadataMap(old => ({ ...old, [String(item.id)]: { metadata } })))
+          .catch(e => setMetadataMap(old => ({ ...old, [String(item.id)]: { error: e.message } })))
+      })
       setCursor(end - 1n)
       setScanned(n => reset ? ids.length : n + ids.length)
       if (nextId !== null) setLatest(nextId)
@@ -60,13 +68,14 @@ export default function EvmRegistryList({ account, walletKind, mine = false, onV
     if (statusFilter !== 'all' && statusName(row.status) !== statusFilter) return false
     const needle = search.trim().toLowerCase()
     if (!needle) return true
-    return [String(row.id), row.contributor, row.reviewer, row.evidenceURI, row.contentHash]
+    return [String(row.id), row.contributor, row.reviewer, row.evidenceURI, row.contentHash, metadataMap[String(row.id)]?.metadata?.title, metadataMap[String(row.id)]?.metadata?.description]
       .some(value => String(value || '').toLowerCase().includes(needle))
   })
   async function shareRecord(row) {
     const url = new URL(window.location.origin + window.location.pathname)
     url.searchParams.set('contribution', String(row.id))
-    url.searchParams.set('evidence', row.evidenceURI || '')
+    // The verifier fetches the exact on-chain evidence string by contribution ID.
+    // Do not put large structured metadata into a share URL.
     try { await navigator.clipboard.writeText(url.toString()); setCopyNotice(`Link to contribution #${row.id} copied.`) }
     catch { setCopyNotice('Could not copy the link; check clipboard permissions.') }
   }
@@ -98,9 +107,11 @@ export default function EvmRegistryList({ account, walletKind, mine = false, onV
       {rows.length === 0 && !loading && latest !== null && <p className="ui-help">No matching contributions in the loaded range. You can load older records below.</p>}
       {copyNotice && <p className="ui-help" role="status">{copyNotice}</p>}
       <div className="ui-record-list">
-        {displayed.map(row => <article key={String(row.id)} className="ui-record">
-          <div className="ui-record-head"><div><h3>Contribution #{String(row.id)}</h3><small>EVM V3 · {short(row.contributor)}</small></div><strong>{statusName(row.status)}</strong></div>
-          <p style={{ overflowWrap: 'anywhere' }}>Evidence: <a href={/^https?:\/\//i.test(row.evidenceURI) ? row.evidenceURI : '#'} target="_blank" rel="noopener noreferrer">{row.evidenceURI}</a></p>
+        {displayed.map(row => { const resolved = metadataMap[String(row.id)]; const external = row.evidenceURI?.startsWith('poc:ext:v1:'); const meta = resolved?.metadata || (external ? null : parseProofEvidence(row.evidenceURI)); return <article key={String(row.id)} className="ui-record">
+          <div className="ui-record-head"><div><h3>{meta?.title || `Contribution #${String(row.id)}`}</h3><small>Contribution #{String(row.id)} · {meta?.category || 'Legacy proof'} · {short(row.contributor)}</small></div><strong>{statusName(row.status)}</strong></div>
+          {meta?.description && <p>{meta?.description}</p>}
+          <p style={{ overflowWrap: 'anywhere' }}>Evidence: <a href={/^https?:\/\//i.test(meta?.evidenceUrl) ? meta?.evidenceUrl : '#'} target="_blank" rel="noopener noreferrer">{meta?.evidenceUrl || 'Invalid evidence metadata'}</a></p>
+          {external && <p className="ui-help" role="status" style={{ color: resolved?.error ? '#f3acac' : '#83e6b6' }}>{resolved?.error ? `External metadata NOT VERIFIED: ${resolved.error}` : resolved?.metadata ? 'External metadata integrity: VERIFIED against on-chain SHA-256' : 'Checking external metadata integrity...'}</p>}
           <p className="ui-help" style={{ overflowWrap: 'anywhere' }}>Hash: {row.contentHash}<br/>Reviewer: {row.reviewer}<br/>Contributor: {row.contributor}</p>
           <div className="poc-timeline" aria-label="Contribution lifecycle">
             <span className="done">Submitted</span><span className="done">Under review</span>
@@ -111,7 +122,7 @@ export default function EvmRegistryList({ account, walletKind, mine = false, onV
             <button className="ui-btn ui-outline" type="button" onClick={() => shareRecord(row)}>Copy proof link</button>
             {onVerify && <button className="ui-btn ui-outline" type="button" onClick={() => onVerify(row)}>Open Verifier</button>}
           </div>
-        </article>)}
+        </article> })}
       </div>
       {cursor !== null && cursor > 0n && <button className="ui-btn ui-outline" type="button" disabled={loading} onClick={() => loadMore(false)}>Load 15 older records (free)</button>}
       <p className="ui-help">Records are fetched from the blockchain, not the browser's demo storage. This list loads in pages to avoid overwhelming the RPC.</p>

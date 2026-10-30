@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { createWalletClient, custom, formatEther } from 'viem'
 import {
   registryAbi as abi, registryAddress as contract, registryChain as chain,
-  registryClient as client, validateSelectedEvm, loadContribution, statusName
+  registryClient as client, validateSelectedEvm, loadContribution, statusName, parseProofEvidence, resolveProofEvidence
 } from './EvmRegistryShared'
 
 const box = { whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', lineHeight: 1.7, fontSize: 12 }
@@ -57,6 +57,7 @@ export default function EvmReviewPanel({ provider, account, walletKind }) {
     try {
       const id = parseId()
       const contribution = await loadContribution(id)
+      const metadata = await resolveProofEvidence(contribution.evidenceURI, contribution.contentHash)
       setRecord(contribution)
       let permission = false
       if (isEvm) {
@@ -64,7 +65,7 @@ export default function EvmReviewPanel({ provider, account, walletKind }) {
         permission = await client.readContract({ address: contract, abi, functionName: 'reviewers', args: [account] })
       }
       setAuthorized(permission)
-      setMessage(`Contribution #${id}\nStatus: ${statusName(contribution.status)}\nContributor: ${contribution.contributor}\nReviewer: ${contribution.reviewer}\nEvidence URI: ${contribution.evidenceURI}\nContent hash: ${contribution.contentHash}\nYour reviewer permission: ${permission ? 'YES' : 'NO / wallet not connected'}`)
+      setMessage(`Contribution #${id}\nStatus: ${statusName(contribution.status)}\nContributor: ${contribution.contributor}\nReviewer: ${contribution.reviewer}\nTitle: ${metadata.title || 'Legacy contribution'}\nCategory: ${metadata.category || '—'}\nDescription: ${metadata.description || '—'}\nEvidence URL: ${metadata.evidenceUrl}\nMetadata integrity: VERIFIED\nMetadata source: ${metadata.isExternal ? metadata.metadataUrl : 'Legacy on-chain'}\nContent hash: ${contribution.contentHash}\nYour reviewer permission: ${permission ? 'YES' : 'NO / wallet not connected'}`)
     } catch (e) { setMessage('Load failed: ' + (e.shortMessage || e.message)) }
     finally { setBusy(false) }
   }
@@ -79,6 +80,7 @@ export default function EvmReviewPanel({ provider, account, walletKind }) {
       if (!permission) throw Error('This account is not an authorized reviewer.')
       if (Number(contribution.status) !== 1) throw Error(`Contribution is ${statusName(contribution.status)}, not Pending Review.`)
       if (eq(contribution.contributor, account)) throw Error('A contributor cannot review their own contribution.')
+      const metadata = action === 'approve' ? await resolveProofEvidence(contribution.evidenceURI, contribution.contentHash) : null
       const functionName = action === 'approve' ? 'approveContribution' : 'rejectContribution'
       const gasEstimated = await client.estimateContractGas({
         address: contract, abi, functionName, args: [id], account
@@ -89,7 +91,7 @@ export default function EvmReviewPanel({ provider, account, walletKind }) {
       const balance = await client.getBalance({ address: account })
       setRecord(contribution)
       setAuthorized(true)
-      setMessage(`Action: ${action.toUpperCase()} Contribution #${id}\nEvidence: ${contribution.evidenceURI}\nEstimated gas: ${gasEstimated}\nGas limit (+5%): ${gasLimit}\nGas price: ${gasPrice} wei\nGas reserve: ${formatEther(reserve)} POT\nWallet balance: ${formatEther(balance)} POT\nThis is a reserve estimate, not the final fee.`)
+      setMessage(`Action: ${action.toUpperCase()} Contribution #${id}\nEvidence: ${metadata ? metadata.evidenceUrl : parseProofEvidence(contribution.evidenceURI).evidenceUrl}\nMetadata integrity: ${metadata ? 'VERIFIED' : 'Not required for rejection'}\nEstimated gas: ${gasEstimated}\nGas limit (+5%): ${gasLimit}\nGas price: ${gasPrice} wei\nGas reserve: ${formatEther(reserve)} POT\nWallet balance: ${formatEther(balance)} POT\nThis is a reserve estimate, not the final fee.`)
       if (balance < reserve) {
         setMessage(m => m + '\nINSUFFICIENT POT. No transaction sent.')
         return
@@ -110,6 +112,7 @@ export default function EvmReviewPanel({ provider, account, walletKind }) {
         client.readContract({ address: contract, abi, functionName: 'reviewers', args: [account] }),
         client.getGasPrice(), client.getBalance({ address: account })
       ])
+      if (preview.action === 'approve') await resolveProofEvidence(contribution.evidenceURI, contribution.contentHash)
       if (!permission || Number(contribution.status) !== 1 || eq(contribution.contributor, account)) throw Error('Reviewer permission or contribution status has changed.')
       if (currentGasPrice > preview.gasPrice || balance < preview.reserve) throw Error('Gas price or balance changed. Check gas again.')
       const currentEstimate = await client.estimateContractGas({ address: contract, abi, functionName: preview.functionName, args: [preview.id], account })
@@ -137,7 +140,7 @@ export default function EvmReviewPanel({ provider, account, walletKind }) {
         <p className="ui-help">Public read-only queue. Review transactions still require an authorized reviewer; the list searches the latest 100 records.</p>
         {queueMessage && <p className="ui-help" role="status">{queueMessage}</p>}
         {queue.map(entry => <div className="poc-queue-item" key={String(entry.id)}>
-          <div><strong>Contribution #{String(entry.id)}</strong><small>{entry.data.evidenceURI}</small></div>
+          <div><strong>Contribution #{String(entry.id)}</strong><small>{parseProofEvidence(entry.data.evidenceURI).title || parseProofEvidence(entry.data.evidenceURI).evidenceUrl}</small></div>
           <button className="ui-btn ui-outline" type="button" onClick={() => { setIdText(String(entry.id)); setRecord(null); setPreview(null); setAgree(false); setMessage('Contribution selected. Click Load from V3 to inspect it.') }}>Review</button>
         </div>)}
         {!queueLoading && queueMessage && queue.length === 0 && <p className="ui-help">No pending entries found in the scanned range.</p>}

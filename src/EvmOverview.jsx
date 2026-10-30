@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react'
 import { CheckCircle2, Clock3, FileCheck2, ShieldCheck } from 'lucide-react'
-import { registryClient as client, registryAbi as abi, registryAddress as contract, statusName } from './EvmRegistryShared'
+import { registryClient as client, registryAbi as abi, registryAddress as contract, statusName, parseProofEvidence, resolveProofEvidence } from './EvmRegistryShared'
 
 const knownReviewer = '0xf51e2695aB684496E902Ba30911318A2644bD344'
 const LIMIT = 300n
 export default function EvmOverview({ onSubmit, onExplore, onVerify }) {
   const [data, setData] = useState(null)
+  const [metadata, setMetadata] = useState({})
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   async function refresh() {
@@ -20,6 +21,8 @@ export default function EvmOverview({ onSubmit, onExplore, onVerify }) {
       const approved = results.filter(r => Number(r.record.status) === 2).length
       const pending = results.filter(r => Number(r.record.status) === 1).length
       const reviewerActive = await client.readContract({address:contract,abi,functionName:'reviewers',args:[knownReviewer]})
+      setMetadata({})
+      results.slice(0, 5).filter(r => r.record.evidenceURI?.startsWith('poc:ext:v1:')).forEach(r => { resolveProofEvidence(r.record.evidenceURI, r.record.contentHash).then(info => setMetadata(old => ({ ...old, [String(r.id)]: info.title }))).catch(() => setMetadata(old => ({ ...old, [String(r.id)]: 'External metadata unavailable or hash mismatch' }))) })
       setData({total:total.toString(), approved, pending, recent:results.slice(0,5), scanned:ids.length, limited:total > LIMIT, reviewerActive})
     } catch(e) { setData(null); setError(e.shortMessage || e.message) }
     finally { setLoading(false) }
@@ -38,7 +41,7 @@ export default function EvmOverview({ onSubmit, onExplore, onVerify }) {
     <section className="ui-panel poc-panel-unified"><div className="ui-panel-head"><div><h2>Recent on-chain contributions</h2><p>Read directly from the deployed ContributionRegistry contract</p></div><button className="ui-btn ui-outline" onClick={onExplore}>Explore all</button></div>
       {!data && !error && <p className="poc-panel-message">Loading live V3 data…</p>}
       {data?.recent.length === 0 && <p className="poc-panel-message">No contributions on V3 yet.</p>}
-      {data?.recent.map(({id,record})=><div className="poc-recent-row" key={String(id)}><div><strong>Contribution #{String(id)}</strong><small>{record.evidenceURI || 'No evidence URI'}</small></div><span className="poc-status-chip">{statusName(record.status)}</span></div>)}
+      {data?.recent.map(({id,record})=><div className="poc-recent-row" key={String(id)}><div><strong>Contribution #{String(id)}</strong><small>{metadata[String(id)] || parseProofEvidence(record.evidenceURI).title || parseProofEvidence(record.evidenceURI).evidenceUrl || 'No evidence URI'}</small></div><span className="poc-status-chip">{statusName(record.status)}</span></div>)}
       <div className="poc-panel-actions"><button className="ui-btn ui-primary" onClick={onSubmit}>Submit contribution</button><button className="ui-btn ui-outline" onClick={onVerify}>Verify proof</button></div>
     </section>
     <p className="poc-footnote">Approved and pending totals are calculated from on-chain records{data?.limited ? ` (latest ${LIMIT} records only)` : ''}. Reviewer count covers only the known reviewer address until a full index is available. Demo records are never included.</p>
