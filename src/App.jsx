@@ -51,6 +51,32 @@ function readStorage(key, fallback) {
 }
 function compact(value, n = 7) { return value ? `${value.slice(0, n)}...${value.slice(-5)}` : '—' }
 const V3_CHAIN_ID = 420420777
+const V3_CHAIN_HEX = `0x${V3_CHAIN_ID.toString(16)}`
+const V3_NETWORK = {
+  chainId: V3_CHAIN_HEX,
+  chainName: 'Portaldot V3 Testnet',
+  nativeCurrency: { name: 'POT', symbol: 'POT', decimals: 18 },
+  rpcUrls: ['https://test-evm-rpc-v3.portaldot.dev'],
+  blockExplorerUrls: ['https://scanner-testnet-v3.portaldot.dev']
+}
+async function ensureV3Network(provider) {
+  let chain = await provider.request({ method: 'eth_chainId' })
+  if (Number(BigInt(chain)) === V3_CHAIN_ID) return
+  try {
+    await provider.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: V3_CHAIN_HEX }] })
+  } catch (error) {
+    // 4902 is the standard 'unknown chain' response; only then offer to add it.
+    if (Number(error?.code) !== 4902 && Number(error?.data?.originalError?.code) !== 4902) throw error
+    await provider.request({ method: 'wallet_addEthereumChain', params: [V3_NETWORK] })
+    chain = await provider.request({ method: 'eth_chainId' })
+    if (Number(BigInt(chain)) !== V3_CHAIN_ID) {
+      await provider.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: V3_CHAIN_HEX }] })
+    }
+  }
+  chain = await provider.request({ method: 'eth_chainId' })
+  if (Number(BigInt(chain)) !== V3_CHAIN_ID) throw new Error('Please approve switching to Portaldot V3 Testnet in your wallet and retry.')
+}
+const WALLET_SESSION_KEY = 'poc-selected-wallet-v1'
 
 function Status({ value }) {
   return <span className={`ui-status ${value === 'Approved' ? 'is-approved' : value === 'Rejected' ? 'is-rejected' : 'is-pending'}`}>{value}</span>
@@ -124,6 +150,8 @@ export default function App() {
         ? rdns === 'io.metamask' || name === 'metamask'
         : rdns.includes('okx') || name.includes('okx')
     })
+    // OKX exposes its own EIP-1193 provider. Prefer it over injected MetaMask shims.
+    if (kind === 'okx' && window.okxwallet?.request) return window.okxwallet
     if (matching) return matching.provider
     const all = window.ethereum?.providers || [window.ethereum].filter(Boolean)
     return kind === 'metamask'
@@ -153,11 +181,11 @@ export default function App() {
         if (!evmProvider) throw Error(`${kind === 'metamask' ? 'MetaMask' : 'OKX Wallet'} not detected. Please install or unlock the extension.`)
         const addresses = await evmProvider.request({ method: 'eth_requestAccounts' })
         if (!addresses?.[0]) throw Error('No EVM account selected.')
-        const currentChain = Number(BigInt(await evmProvider.request({ method: 'eth_chainId' })))
-        if (currentChain !== V3_CHAIN_ID) {
-          throw Error(`Wrong EVM network (Chain ID ${currentChain}). Switch to Portaldot V3 Testnet (Chain ID ${V3_CHAIN_ID}) in your wallet and try again.`)
-        }
-        chosenAddress = addresses[0]
+        await ensureV3Network(evmProvider)
+        // Some injected wallets change accounts while adding or switching networks.
+        // Read the authorized account again from the same selected provider.
+        const currentAddresses = await evmProvider.request({ method: 'eth_accounts' })
+        chosenAddress = currentAddresses?.[0] || addresses[0]
         chosenName = kind === 'metamask' ? 'MetaMask' : 'OKX Wallet'
       }
       selectedProvider.current = evmProvider
@@ -168,12 +196,48 @@ export default function App() {
       setWalletStatus('Connected')
       setWalletPickerOpen(false)
       setNotice('')
+      try { sessionStorage.setItem(WALLET_SESSION_KEY, kind) } catch { /* storage unavailable */ }
     } catch (error) {
-      setWalletStatus(error?.message || 'Connection failed')
-      setNotice(error?.message || 'Could not connect wallet')
-      setWalletPickerOpen(false)
+      const message = Number(error?.code) === 4001
+        ? 'Wallet request was rejected. Please approve the connection/network change and retry.'
+        : (error?.message || 'Could not connect wallet')
+      setWalletStatus(message)
+      setNotice(message)
+      setWalletPickerOpen(true) // Preserve the error message and allow retry.
     } finally { setBusy(false) }
   }
+
+  // Restore the specific, previously authorized provider. Provider announcements
+  // may arrive after the first render, so retry when EIP-6963 discovery updates.
+  useEffect(() => {
+    let canceled = false
+    const kind = (() => { try { return sessionStorage.getItem(WALLET_SESSION_KEY) } catch { return null } })()
+    if (!['okx', 'metamask'].includes(kind) || walletKindRef.current) return
+    const provider = chooseEvmProvider(kind)
+    if (!provider?.request) return
+    async function restore() {
+      try {
+        const [addresses, chain] = await Promise.all([
+          provider.request({ method: 'eth_accounts' }),
+          provider.request({ method: 'eth_chainId' })
+        ])
+        if (canceled || walletKindRef.current || !addresses?.[0]) return
+        if (Number(BigInt(chain)) !== V3_CHAIN_ID) {
+          setWalletStatus(`Previously authorized ${kind === 'okx' ? 'OKX' : 'MetaMask'} wallet is on another network. Connect to switch to Portaldot V3.`)
+          return
+        }
+        selectedProvider.current = provider
+        walletKindRef.current = kind
+        setWalletKind(kind)
+        setAccount(addresses[0])
+        setAccountName(kind === 'okx' ? 'OKX Wallet' : 'MetaMask')
+        setWalletStatus('Connected')
+        setNotice('')
+      } catch { /* No authorized session; explicit connection can prompt. */ }
+    }
+    restore()
+    return () => { canceled = true }
+  }, [evmProviders])
 
   // Reflect account/network changes only for the selected EVM provider.
   useEffect(() => {
@@ -182,7 +246,10 @@ export default function App() {
     const onAccounts = (addresses) => {
       if (walletKindRef.current !== walletKind) return
       setAccount(addresses?.[0] || '')
-      if (!addresses?.length) setWalletStatus('Disconnected by wallet')
+      if (!addresses?.length) {
+        setAccountName('')
+        setWalletStatus('Disconnected by wallet')
+      }
     }
     const onChain = (chainId) => {
       if (Number(BigInt(chainId)) !== V3_CHAIN_ID) {
@@ -208,6 +275,7 @@ export default function App() {
     setAccount(''); setAccountName(''); setWalletKind('')
     setWalletStatus('Disconnected from page')
     setWalletPickerOpen(false)
+    try { sessionStorage.removeItem(WALLET_SESSION_KEY) } catch { /* storage unavailable */ }
   }
   function saveItems(items) {
     try {
@@ -351,6 +419,7 @@ export default function App() {
                 <ChevronRight size={18}/>
               </button>
             ))}
+            {walletStatus && walletStatus !== 'Connected' && walletStatus !== 'Not connected' && <p role="status" style={{ fontSize: 12, color: '#ffbdad', overflowWrap: 'anywhere' }}>{walletStatus}</p>}
             {account && <button type="button" onClick={disconnect} style={{ marginTop: 4, padding: 10, background: 'transparent', border: '1px solid #4a5572', borderRadius: 9, color: '#f5f4ff', cursor: 'pointer' }}>Disconnect current wallet</button>}
             <p style={{ fontSize: 12, opacity: .75, marginBottom: 0, lineHeight: 1.5 }}>EVM on-chain submission is available on the Submit page. The original Submit form and Review queue remain local demos; native proof publishing requires Portaldot Wallet.</p>
           </section>

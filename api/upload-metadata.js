@@ -7,6 +7,52 @@ const WINDOW_MS = 120000
 const recent = new Map() // best-effort only; serverless instances do not share this map
 const json = (res, code, body) => res.status(code).json(body)
 
+// The public mode must use shared atomic counters. In-memory limits do NOT protect serverless deployments.
+async function reservePublicUpload({ address, signature, req }) {
+  const url = process.env.UPSTASH_REDIS_REST_URL?.replace(/\/$/, '')
+  const token = process.env.UPSTASH_REDIS_REST_TOKEN
+  if (!url || !token) return { status: 503, error: 'Public uploads are not configured. Set Upstash Redis REST credentials.' }
+  const forwarded = req.headers['x-forwarded-for']
+  const ip = (Array.isArray(forwarded) ? forwarded[0] : forwarded || '').split(',')[0].trim() || req.socket?.remoteAddress || 'unknown'
+  // Never store raw IP addresses or full signatures in Redis keys.
+  const digest = value => createHash('sha256').update(value).digest('hex')
+  const day = Math.floor(Date.now() / 86400000)
+  const keys = [
+    `poc:v1:wallet:${day}:${address.toLowerCase()}`,
+    `poc:v1:ip:${day}:${digest(ip)}`,
+    `poc:v1:global:${day}`,
+    `poc:v1:sig:${digest(signature)}`,
+  ]
+  const script = `
+    if redis.call('EXISTS', KEYS[4]) == 1 then return 4 end
+    if tonumber(redis.call('GET', KEYS[1]) or '0') >= tonumber(ARGV[1]) then return 1 end
+    if tonumber(redis.call('GET', KEYS[2]) or '0') >= tonumber(ARGV[2]) then return 2 end
+    if tonumber(redis.call('GET', KEYS[3]) or '0') >= tonumber(ARGV[3]) then return 3 end
+    redis.call('SET', KEYS[4], '1', 'EX', 300)
+    for i = 1, 3 do
+      redis.call('INCR', KEYS[i])
+      redis.call('EXPIRE', KEYS[i], 172800)
+    end
+    return 0
+  `
+  let response
+  try {
+    response = await fetch(url, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(['EVAL', script, 4, ...keys, 3, 12, 100]),
+      signal: AbortSignal.timeout(5000),
+    })
+  } catch { return { status: 503, error: 'Upload quota service unavailable. Please try later.' } }
+  if (!response.ok) return { status: 503, error: 'Upload quota service rejected the request.' }
+  let result
+  try { result = await response.json() } catch { return { status: 503, error: 'Invalid response from quota service.' } }
+  if (result.error || typeof result.result !== 'number') return { status: 503, error: 'Upload quota service error.' }
+  if (result.result === 0) return null
+  if (result.result === 4) return { status: 409, error: 'This wallet signature was already used. Check gas again.' }
+  return { status: 429, error: 'Public upload quota reached (wallet: 3/day, network address: 12/day, community: 100/day). Try again tomorrow.' }
+}
+
 export default async function handler(req, res) {
   res.setHeader('Cache-Control', 'no-store')
   res.setHeader('X-Content-Type-Options', 'nosniff')
@@ -34,16 +80,22 @@ export default async function handler(req, res) {
     const message = `PoC metadata upload on Portaldot V3\nWallet: ${address.toLowerCase()}\nSHA-256: ${hash}\nTimestamp: ${timestamp}\nNo blockchain transaction.`
     if (!(await verifyMessage({ address, message, signature }))) return json(res, 401, { error: 'Invalid wallet signature.' })
 
-    // Pilot allowlist: wallet signatures alone do not stop arbitrary users from using your storage quota.
-    const allowList = (process.env.POC_UPLOAD_ALLOWED_WALLETS || '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean)
-    if (!allowList.length) return json(res, 503, { error: 'Configure POC_UPLOAD_ALLOWED_WALLETS before enabling uploads.' })
-    if (!allowList.includes(address.toLowerCase())) return json(res, 403, { error: 'Wallet is not on the allowed uploader list.' })
-    const now = Date.now()
-    const attempts = (recent.get(address.toLowerCase()) || []).filter(t => now - t < 60000)
-    if (attempts.length >= 3) return json(res, 429, { error: 'Upload rate limit reached. Try again later.' })
-    attempts.push(now)
-    recent.set(address.toLowerCase(), attempts)
-    if (recent.size > 1000) recent.clear()
+    // Explicit operating modes. Never silently turn missing allowlist into unlimited public uploads.
+    const mode = (process.env.POC_UPLOAD_MODE || 'allowlist').trim().toLowerCase()
+    if (mode === 'public') {
+      const rejected = await reservePublicUpload({ address, signature, req })
+      if (rejected) return json(res, rejected.status, { error: rejected.error })
+    } else if (mode === 'allowlist') {
+      const allowList = (process.env.POC_UPLOAD_ALLOWED_WALLETS || '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean)
+      if (!allowList.length) return json(res, 503, { error: 'Configure POC_UPLOAD_ALLOWED_WALLETS before enabling uploads.' })
+      if (!allowList.includes(address.toLowerCase())) return json(res, 403, { error: 'Wallet is not on the allowed uploader list.' })
+      const now = Date.now()
+      const attempts = (recent.get(address.toLowerCase()) || []).filter(t => now - t < 60000)
+      if (attempts.length >= 3) return json(res, 429, { error: 'Upload rate limit reached. Try again later.' })
+      attempts.push(now)
+      recent.set(address.toLowerCase(), attempts)
+      if (recent.size > 1000) recent.clear()
+    } else return json(res, 503, { error: 'Invalid POC_UPLOAD_MODE. Use allowlist or public.' })
 
     // Immutable, content-address-derived *pathname*. Do not overwrite an existing path.
     // Object bytes are exactly the same bytes that the frontend hashes.
