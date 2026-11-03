@@ -73,3 +73,8 @@
 .poc-queue-item>div {min-width:0;flex:1;display:grid;gap:5px}
 .poc-queue-item small {color:#aebbd4;overflow-wrap:anywhere}
 @media(max-width:650px){.poc-filter-row{grid-template-columns:1fr}.poc-inline-actions .ui-btn{width:100%;justify-content:center}}
+
+/* Public registry search — matches existing purple/indigo design language. */
+.poc-search-actions {display:flex;align-items:center;flex-wrap:wrap;gap:10px;margin:12px 0;}
+.poc-search-actions .ui-btn {min-height:42px;}
+@media(max-width:650px){.poc-search-actions .ui-btn{width:100%;justify-content:center;}}

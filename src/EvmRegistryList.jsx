@@ -1,8 +1,25 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { registryClient as client, registryAbi as abi, registryAddress as contract, statusName, parseProofEvidence, resolveProofEvidence } from './EvmRegistryShared'
 
 const PAGE_SIZE = 15n
 const short = (s) => s ? `${s.slice(0, 10)}…${s.slice(-6)}` : '—'
+const pause = ms => new Promise(resolve => setTimeout(resolve, ms))
+const normalizeUrl = value => {
+  try {
+    const url = new URL(value.trim())
+    if (!['http:', 'https:'].includes(url.protocol)) return null
+    url.hash = ''
+    url.hostname = url.hostname.toLowerCase()
+    if (url.pathname.length > 1) url.pathname = url.pathname.replace(/\/+$/, '')
+    return url.toString()
+  } catch { return null }
+}
+const matchesTerm = (row, metadata, term, urlTerm) => {
+  const fields = [String(row.id), row.contributor, row.reviewer, row.contentHash,
+    metadata?.title, metadata?.description, metadata?.category, metadata?.evidenceUrl]
+  if (urlTerm) return normalizeUrl(metadata?.evidenceUrl || '') === urlTerm
+  return fields.some(value => String(value || '').toLowerCase().includes(term))
+}
 
 export default function EvmRegistryList({ account, walletKind, mine = false, onVerify, onExplore, onConnectWallet }) {
   const [rows, setRows] = useState([])
@@ -15,10 +32,17 @@ export default function EvmRegistryList({ account, walletKind, mine = false, onV
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState('all')
   const [copyNotice, setCopyNotice] = useState('')
+  const [registryResults, setRegistryResults] = useState(null)
+  const [registryProgress, setRegistryProgress] = useState({ checked: 0, total: 0, failed: 0 })
+  const [registryRunning, setRegistryRunning] = useState(false)
+  const [registryMessage, setRegistryMessage] = useState('')
+  const scanToken = useRef(0)
   const filtered = mine
   const canFilter = !!account && ['metamask', 'okx'].includes(walletKind)
 
   useEffect(() => {
+    scanToken.current += 1
+    setRegistryRunning(false); setRegistryResults(null); setRegistryMessage('')
     setRows([]); setMetadataMap({}); setCursor(null); setLatest(null); setError(''); setScanned(0)
   }, [account, walletKind, mine])
 
@@ -63,14 +87,80 @@ export default function EvmRegistryList({ account, walletKind, mine = false, onV
     finally { setLoading(false) }
   }
 
+  // Explicit full-registry lookup. One RPC request at a time to respect testnet rate limits.
+  // Metadata is hash-checked by resolveProofEvidence before it can become a search hit.
+  async function searchRegistry() {
+    const term = search.trim().toLowerCase()
+    if (!term || registryRunning || loading) return
+    const urlTerm = normalizeUrl(search)
+    const token = ++scanToken.current
+    setRegistryRunning(true)
+    setRegistryResults([])
+    setRegistryMessage('')
+    setRegistryProgress({ checked: 0, total: 0, failed: 0 })
+    try {
+      const nextId = await client.readContract({ address: contract, abi, functionName: 'nextId' })
+      const total = Number(nextId - 1n)
+      if (!Number.isSafeInteger(total) || total < 0) throw Error('Registry size is too large for browser lookup.')
+      setRegistryProgress({ checked: 0, total, failed: 0 })
+      let failed = 0
+      let found = []
+      for (let id = total; id >= 1; id--) {
+        if (scanToken.current !== token) return
+        try {
+          const entry = await client.readContract({ address: contract, abi, functionName: 'getContribution', args: [BigInt(id)] })
+          const row = { id: BigInt(id), ...entry }
+          let metadata = null
+          if (row.evidenceURI?.startsWith('poc:ext:v1:')) {
+            try { metadata = await resolveProofEvidence(row.evidenceURI, row.contentHash) }
+            catch { failed++ }
+          } else {
+            try { metadata = parseProofEvidence(row.evidenceURI) }
+            catch { failed++ }
+          }
+          if (metadata && matchesTerm(row, metadata, term, urlTerm) &&
+              (statusFilter === 'all' || statusName(row.status) === statusFilter)) {
+            found.push(row)
+            setMetadataMap(old => ({ ...old, [String(id)]: { metadata } }))
+            setRegistryResults([...found])
+          } else if (!urlTerm && matchesTerm(row, metadata, term, null) &&
+              (statusFilter === 'all' || statusName(row.status) === statusFilter)) {
+            // ID/address/hash lookup does not require external metadata to load.
+            found.push(row)
+            setMetadataMap(old => ({ ...old, [String(id)]: metadata ? { metadata } : { error: 'Metadata could not be verified' } }))
+            setRegistryResults([...found])
+          }
+        } catch { failed++ }
+        if (scanToken.current !== token) return
+        setRegistryProgress({ checked: total - id + 1, total, failed })
+        if (id > 1) await pause(350)
+      }
+      setRegistryMessage(failed
+        ? `Search completed with ${failed} unreadable or unverified record(s); results may be incomplete.`
+        : `Search complete. Checked all ${total} on-chain contribution(s).`)
+    } catch (e) {
+      if (scanToken.current === token) setRegistryMessage(`Search interrupted: ${e.shortMessage || e.message}. Results may be incomplete.`)
+    } finally {
+      if (scanToken.current === token) setRegistryRunning(false)
+    }
+  }
+
+  function cancelRegistrySearch() {
+    scanToken.current += 1
+    setRegistryRunning(false)
+    setRegistryMessage('Search stopped. Partial results only.')
+  }
+
+  const searchAllActive = !mine && registryResults !== null
   const displayed = rows.filter(row => {
     if (row.readError) return false
     if (statusFilter !== 'all' && statusName(row.status) !== statusFilter) return false
     const needle = search.trim().toLowerCase()
     if (!needle) return true
-    return [String(row.id), row.contributor, row.reviewer, row.evidenceURI, row.contentHash, metadataMap[String(row.id)]?.metadata?.title, metadataMap[String(row.id)]?.metadata?.description]
+    return [String(row.id), row.contributor, row.reviewer, row.evidenceURI, row.contentHash, metadataMap[String(row.id)]?.metadata?.title, metadataMap[String(row.id)]?.metadata?.description, metadataMap[String(row.id)]?.metadata?.evidenceUrl]
       .some(value => String(value || '').toLowerCase().includes(needle))
   })
+  const visibleRows = searchAllActive ? registryResults : displayed
   async function shareRecord(row) {
     const url = new URL(window.location.origin + window.location.pathname)
     url.searchParams.set('contribution', String(row.id))
@@ -95,19 +185,26 @@ export default function EvmRegistryList({ account, walletKind, mine = false, onV
         </div>
       </div>}
       {(!filtered || canFilter) && <div className="poc-filter-row">
-        <input aria-label="Search loaded contributions" value={search} onChange={e => setSearch(e.target.value)} placeholder="Search loaded ID, address, URL, hash" />
-        <select aria-label="Filter loaded contributions by status" value={statusFilter} onChange={e => setStatusFilter(e.target.value)}>
+        <input aria-label="Search loaded contributions" value={search} onChange={e => { setSearch(e.target.value); setRegistryResults(null); setRegistryMessage(''); scanToken.current += 1; setRegistryRunning(false) }} placeholder={mine ? 'Search loaded ID, address, or title' : 'Paste evidence URL, title, ID, or wallet'} />
+        <select aria-label="Filter loaded contributions by status" value={statusFilter} onChange={e => { setStatusFilter(e.target.value); setRegistryResults(null); setRegistryMessage(''); scanToken.current += 1; setRegistryRunning(false) }}>
           <option value="all">All statuses</option><option value="Pending Review">Pending Review</option><option value="Approved">Approved</option><option value="Rejected">Rejected</option>
         </select>
       </div>}
-      <p className="ui-help">Filters search records already loaded below. Use “Load older” to include earlier records.</p>
-      <button className="ui-btn ui-outline" type="button" disabled={loading || (filtered && !canFilter)} onClick={() => loadMore(true)}>{loading ? 'Loading...' : 'Refresh from V3 (free)'}</button>
+      <p className="ui-help">{mine ? 'Filters search records already loaded below. Use “Load older” to include earlier records.' : 'Quick filter checks loaded records. For an evidence URL or keyword anywhere on-chain, use Search entire registry.'}</p>
+      {!mine && <div className="poc-search-actions">
+        <button className="ui-btn ui-primary" type="button" disabled={registryRunning || loading || !search.trim()} onClick={searchRegistry}>{registryRunning ? 'Searching registry...' : 'Search entire registry'}</button>
+        {registryRunning && <button className="ui-btn ui-outline" type="button" onClick={cancelRegistrySearch}>Stop search</button>}
+        {searchAllActive && !registryRunning && <button className="ui-btn ui-outline" type="button" onClick={() => { setRegistryResults(null); setRegistryMessage('') }}>Back to loaded records</button>}
+      </div>}
+      {searchAllActive && <p className="ui-help" role="status">Registry scan: {registryProgress.checked} / {registryProgress.total} · Matches: {registryResults.length}{registryProgress.failed ? ` · Unreadable/unverified: ${registryProgress.failed}` : ''}</p>}
+      {registryMessage && <p className="ui-help" role="status">{registryMessage}</p>}
+      <button className="ui-btn ui-outline" type="button" disabled={loading || registryRunning || (filtered && !canFilter)} onClick={() => loadMore(true)}>{loading ? 'Loading...' : 'Refresh from V3 (free)'}</button>
       {latest !== null && <p className="ui-help">On-chain contributions: {String(latest - 1n)} · Scanned: {scanned} · Displayed: {rows.length}{filtered ? ' · Load older to search further back' : ''}</p>}
       {error && <p role="alert" className="ui-help" style={{ color: '#f3acac' }}>{error}</p>}
       {rows.length === 0 && !loading && latest !== null && <p className="ui-help">No matching contributions in the loaded range. You can load older records below.</p>}
       {copyNotice && <p className="ui-help" role="status">{copyNotice}</p>}
       <div className="ui-record-list">
-        {displayed.map(row => { const resolved = metadataMap[String(row.id)]; const external = row.evidenceURI?.startsWith('poc:ext:v1:'); const meta = resolved?.metadata || (external ? null : parseProofEvidence(row.evidenceURI)); return <article key={String(row.id)} className="ui-record">
+        {visibleRows.map(row => { const resolved = metadataMap[String(row.id)]; const external = row.evidenceURI?.startsWith('poc:ext:v1:'); const meta = resolved?.metadata || (external ? null : parseProofEvidence(row.evidenceURI)); return <article key={String(row.id)} className="ui-record">
           <div className="ui-record-head"><div><h3>{meta?.title || `Contribution #${String(row.id)}`}</h3><small>Contribution #{String(row.id)} · {meta?.category || 'Legacy proof'} · {short(row.contributor)}</small></div><strong>{statusName(row.status)}</strong></div>
           {meta?.description && <p>{meta?.description}</p>}
           <p style={{ overflowWrap: 'anywhere' }}>Evidence: <a href={/^https?:\/\//i.test(meta?.evidenceUrl) ? meta?.evidenceUrl : '#'} target="_blank" rel="noopener noreferrer">{meta?.evidenceUrl || 'Invalid evidence metadata'}</a></p>
@@ -124,8 +221,8 @@ export default function EvmRegistryList({ account, walletKind, mine = false, onV
           </div>
         </article> })}
       </div>
-      {cursor !== null && cursor > 0n && <button className="ui-btn ui-outline" type="button" disabled={loading} onClick={() => loadMore(false)}>Load 15 older records (free)</button>}
-      <p className="ui-help">Records are fetched from the blockchain, not the browser's demo storage. This list loads in pages to avoid overwhelming the RPC.</p>
+      {searchAllActive && !registryRunning && registryResults.length === 0 && <p className="ui-help">No matching contributions found.</p>}
+      {!searchAllActive && cursor !== null && cursor > 0n && <button className="ui-btn ui-outline" type="button" disabled={loading} onClick={() => loadMore(false)}>Load 15 older records (free)</button>}
     </div>
   </section>
 }
