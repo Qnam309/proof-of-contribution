@@ -162,11 +162,17 @@ Configure required server-side environment variables in the Vercel project. Blob
 | Publish optional Native Anchor | **Yes** — Portaldot native wallet |
 | Register/inspect an existing Native Anchor reference | **No blockchain transaction**; server API may have storage usage costs |
 
-## MVP limitations and next steps
+## Future development roadmap
 
-This is a **testnet MVP**. Availability depends on Portaldot RPCs, wallet extensions, metadata hosting and Vercel services. The index is a discovery layer, not a trust oracle. Public upload protection, reviewer-management visibility, error handling and indexing scalability need additional testing before broad public deployment.
+The current release validates the core workflow on testnet. The next stages focus on turning a working proof-of-concept into infrastructure that other Web3 communities can adopt.
 
-Potential next steps include Native-only Submit/Review with explicit identity and authorization design, safer automated anchor indexing, searchable evidence URLs, richer contributor profiles and reputation signals.
+| Stage | Priority | Planned outcome |
+| --- | --- | --- |
+| **Phase 1 — Reliability** | Harden public indexing, upload abuse protection, RPC fallback and operational monitoring | More dependable verification and discovery as usage grows |
+| **Phase 2 — Native participation** | Design native-wallet contribution submission, reviewer permissions and a consistent record model across execution environments | Members using Portaldot Native wallets can participate without requiring an EVM wallet |
+| **Phase 3 — Ecosystem adoption** | Add evidence-URL search, portable contributor profiles and integration endpoints for community apps | External projects can discover verified records and build their own recognition workflows |
+
+These are **planned capabilities, not features claimed to be live**. Each stage requires security review and real-network testing before wider release. Longer-term reputation signals should be grounded in reviewed records, rather than treating blockchain hashes as proof of contribution quality.
 
 ---
 
