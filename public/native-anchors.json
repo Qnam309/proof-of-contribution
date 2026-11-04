@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "network": "Portaldot V3 Testnet",
+  "notes": "Discovery hints only. Every unified verification must independently validate the EVM record and native transaction.",
+  "anchors": [
+    {
+      "contributionId": "2",
+      "contentHash": "0xabaec1d5aa5a84809f1efbfbfe880b4f0811ef38445688751e35523cab139ae1",
+      "nativeTx": "0xa69a10efa9d01c7490fb6f35b34138851d2f55e9a318daa78d1fa4bde826755b",
+      "nativeBlock": "0x7f50dd8583ac7ea4d48449626c3b95f88529dcdb80ff2235f4478f58ceb107a9",
+      "label": "Contribution #2 native anchor"
+    }
+  ]
+}

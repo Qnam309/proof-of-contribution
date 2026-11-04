@@ -32,7 +32,8 @@ export default function EvmRegistryList({ account, walletKind, mine = false, onV
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState('all')
   const [copyNotice, setCopyNotice] = useState('')
-  const [reasonMap, setReasonMap] = useState({})
+  const [nativeAnchors, setNativeAnchors] = useState([])
+  const [nativeIndexWarning, setNativeIndexWarning] = useState('')
   const [registryResults, setRegistryResults] = useState(null)
   const [registryProgress, setRegistryProgress] = useState({ checked: 0, total: 0, failed: 0 })
   const [registryRunning, setRegistryRunning] = useState(false)
@@ -40,6 +41,47 @@ export default function EvmRegistryList({ account, walletKind, mine = false, onV
   const scanToken = useRef(0)
   const filtered = mine
   const canFilter = !!account && ['metamask', 'okx'].includes(walletKind)
+
+  // Hints only: the Unified Verify page always rechecks both chains.
+  // Prefer the durable Blob index API, with the static public manifest as fallback.
+  useEffect(() => {
+    let cancelled = false
+    const isValid = a => /^[1-9]\d*$/.test(String(a.contributionId)) &&
+      /^0x[0-9a-fA-F]{64}$/.test(a.contentHash || '') &&
+      /^0x[0-9a-fA-F]{64}$/.test(a.nativeTx || '') &&
+      (/^0x[0-9a-fA-F]{64}$/.test(String(a.nativeBlock || '')) || /^[1-9]\d*$/.test(String(a.nativeBlock || '')))
+    async function readIndex() {
+      let publicAnchors = []
+      let apiAnchors = []
+      const warnings = []
+      try {
+        const response = await fetch(`${import.meta.env.BASE_URL}native-anchors.json`, { cache: 'no-store' })
+        if (!response.ok) throw Error(`HTTP ${response.status}`)
+        publicAnchors = (await response.json()).anchors || []
+      } catch (error) { warnings.push(`Static anchor manifest: ${error.message}`) }
+      try {
+        const response = await fetch('/api/native-anchors', { cache: 'no-store' })
+        if (!response.ok) throw Error(`HTTP ${response.status}`)
+        const payload = await response.json()
+        if (!Array.isArray(payload.anchors)) throw Error('Invalid API index')
+        apiAnchors = payload.anchors
+      } catch (error) { warnings.push(`Live anchor index unavailable: ${error.message}`) }
+      const all = [...apiAnchors, ...publicAnchors].filter(isValid)
+      const seen = new Set()
+      const unique = all.filter(a => {
+        const key = `${a.contributionId}:${a.nativeTx.toLowerCase()}`
+        if (seen.has(key)) return false
+        seen.add(key)
+        return true
+      })
+      if (!cancelled) {
+        setNativeAnchors(unique)
+        setNativeIndexWarning(warnings.join(' · '))
+      }
+    }
+    readIndex()
+    return () => { cancelled = true }
+  }, [])
 
   useEffect(() => {
     scanToken.current += 1
@@ -162,26 +204,40 @@ export default function EvmRegistryList({ account, walletKind, mine = false, onV
       .some(value => String(value || '').toLowerCase().includes(needle))
   })
   const visibleRows = searchAllActive ? registryResults : displayed
-  useEffect(() => {
-    let canceled = false
-    const rejected = visibleRows.filter(row => !row.readError && Number(row.status) === 3)
-    for (const row of rejected) {
-      const id = String(row.id)
-      if (reasonMap[id]) continue
-      fetch(`/api/rejection-reason?id=${encodeURIComponent(id)}`, { cache: 'no-store' })
-        .then(async r => r.ok ? await r.json() : { missing: true })
-        .then(data => { if (!canceled) setReasonMap(prev => ({ ...prev, [id]: data })) })
-        .catch(() => { if (!canceled) setReasonMap(prev => ({ ...prev, [id]: { missing: true } })) })
-    }
-    return () => { canceled = true }
-  }, [rows, registryResults, metadataMap, statusFilter, search])
-
-  async function shareRecord(row) {
+  function nativeAnchorFor(row) {
+    // Require exact Contribution ID AND recorded EVM contentHash match.
+    // A stale or malicious index cannot silently attach a native proof to another record.
+    return nativeAnchors.find(anchor =>
+      String(anchor.contributionId) === String(row.id) &&
+      anchor.contentHash.toLowerCase() === String(row.contentHash).toLowerCase()
+    ) || null
+  }
+  function linkForRow(row, unified = false) {
     const url = new URL(window.location.origin + window.location.pathname)
     url.searchParams.set('contribution', String(row.id))
-    // The verifier fetches the exact on-chain evidence string by contribution ID.
-    // Do not put large structured metadata into a share URL.
-    try { await navigator.clipboard.writeText(url.toString()); setCopyNotice(`Link to contribution #${row.id} copied.`) }
+    const anchor = unified ? nativeAnchorFor(row) : null
+    if (anchor) {
+      url.searchParams.set('nativeTx', anchor.nativeTx)
+      url.searchParams.set('nativeBlock', String(anchor.nativeBlock))
+    }
+    return url.toString()
+  }
+  async function shareUnified(row) {
+    const anchor = nativeAnchorFor(row)
+    if (!anchor) { setCopyNotice('No indexed Native Anchor for this contribution. Share the EVM proof instead.'); return }
+    try {
+      await navigator.clipboard.writeText(linkForRow(row, true))
+      setCopyNotice(`Unified proof link for contribution #${row.id} copied. The recipient verifies both chains on opening.`)
+    } catch { setCopyNotice('Could not copy the link; check clipboard permissions.') }
+  }
+  function openUnified(row) {
+    const anchor = nativeAnchorFor(row)
+    if (!anchor) return
+    window.location.assign(linkForRow(row, true))
+  }
+  async function shareRecord(row) {
+    // Regular proof links remain EVM-only; Unified links are offered separately.
+    try { await navigator.clipboard.writeText(linkForRow(row)); setCopyNotice(`Link to contribution #${row.id} copied.`) }
     catch { setCopyNotice('Could not copy the link; check clipboard permissions.') }
   }
   return <section className="ui-panel ui-form-panel" style={{ marginTop: 22 }}>
@@ -217,16 +273,13 @@ export default function EvmRegistryList({ account, walletKind, mine = false, onV
       {latest !== null && <p className="ui-help">On-chain contributions: {String(latest - 1n)} · Scanned: {scanned} · Displayed: {rows.length}{filtered ? ' · Load older to search further back' : ''}</p>}
       {error && <p role="alert" className="ui-help" style={{ color: '#f3acac' }}>{error}</p>}
       {rows.length === 0 && !loading && latest !== null && <p className="ui-help">No matching contributions in the loaded range. You can load older records below.</p>}
+      {!mine && <p className="ui-help">Native Anchor discovery combines the public example manifest with the live on-chain-validated registry when available. Every shared Unified Proof checks both chains again.</p>}
+      {!mine && nativeIndexWarning && <p className="ui-help" role="status">{nativeIndexWarning} EVM verification remains available.</p>}
       {copyNotice && <p className="ui-help" role="status">{copyNotice}</p>}
       <div className="ui-record-list">
         {visibleRows.map(row => { const resolved = metadataMap[String(row.id)]; const external = row.evidenceURI?.startsWith('poc:ext:v1:'); const meta = resolved?.metadata || (external ? null : parseProofEvidence(row.evidenceURI)); return <article key={String(row.id)} className="ui-record">
           <div className="ui-record-head"><div><h3>{meta?.title || `Contribution #${String(row.id)}`}</h3><small>Contribution #{String(row.id)} · {meta?.category || 'Legacy proof'} · {short(row.contributor)}</small></div><strong>{statusName(row.status)}</strong></div>
           {meta?.description && <p>{meta?.description}</p>}
-          {Number(row.status) === 3 && reasonMap[String(row.id)]?.signed && <div className="poc-rejection-note" role="note">
-            <strong>Rejection reason</strong>
-            <p>{reasonMap[String(row.id)].reason}</p>
-            <small>Public off-chain note · signed by the on-chain rejecting reviewer ({short(reasonMap[String(row.id)].reviewer)}). Not stored in the contract.</small>
-          </div>}
           <p style={{ overflowWrap: 'anywhere' }}>Evidence: <a href={/^https?:\/\//i.test(meta?.evidenceUrl) ? meta?.evidenceUrl : '#'} target="_blank" rel="noopener noreferrer">{meta?.evidenceUrl || 'Invalid evidence metadata'}</a></p>
           {external && <p className="ui-help" role="status" style={{ color: resolved?.error ? '#f3acac' : '#83e6b6' }}>{resolved?.error ? `External metadata NOT VERIFIED: ${resolved.error}` : resolved?.metadata ? 'External metadata integrity: VERIFIED against on-chain SHA-256' : 'Checking external metadata integrity...'}</p>}
           <p className="ui-help" style={{ overflowWrap: 'anywhere' }}>Hash: {row.contentHash}<br/>Reviewer: {row.reviewer}<br/>Contributor: {row.contributor}</p>
@@ -235,8 +288,11 @@ export default function EvmRegistryList({ account, walletKind, mine = false, onV
             <span className={Number(row.status) === 1 ? '' : 'done'}>{statusName(row.status) === 'Pending Review' ? 'Awaiting decision' : statusName(row.status)}</span>
             {Number(row.status) === 2 && <span className="done">Ready to verify</span>}
           </div>
+          {nativeAnchorFor(row) && <p className="ui-help" style={{ color: '#83e6b6' }}>Native Anchor indexed · Open Unified Proof to verify Native block and EVM hash live.</p>}
           <div className="poc-inline-actions">
-            <button className="ui-btn ui-outline" type="button" onClick={() => shareRecord(row)}>Copy proof link</button>
+            <button className="ui-btn ui-outline" type="button" onClick={() => shareRecord(row)}>Copy EVM proof link</button>
+            {nativeAnchorFor(row) && <button className="ui-btn ui-primary" type="button" onClick={() => shareUnified(row)}>Copy Unified Proof link</button>}
+            {nativeAnchorFor(row) && <button className="ui-btn ui-outline" type="button" onClick={() => openUnified(row)}>Open Unified Verify</button>}
             {onVerify && <button className="ui-btn ui-outline" type="button" onClick={() => onVerify(row)}>Open Verifier</button>}
           </div>
         </article> })}

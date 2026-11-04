@@ -154,6 +154,21 @@ export default function UnifiedProofPanel({ account, walletKind }) {
     finally { if (api) await api.disconnect().catch(() => {}); setBusy(false) }
   }
 
+  async function registerVerifiedAnchor(id, contribution, checked) {
+    try {
+      const response = await fetch('/api/native-anchors', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contributionId: String(id), contentHash: contribution.contentHash,
+          nativeTx: checked.txHash, nativeBlock: checked.blockHash
+        })
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) throw Error(data.error || `HTTP ${response.status}`)
+      return { ok: true }
+    } catch (error) { return { ok: false, error: toError(error) } }
+  }
+
   async function publish() {
     if (!estimate || busy || !estimate.sufficient) return
     setBusy(true); let api; let unsubscribe
@@ -199,7 +214,8 @@ export default function UnifiedProofPanel({ account, walletKind }) {
         return
       }
       setVerified(confirmed)
-      setMessage(`NATIVE ANCHOR VERIFIED for EVM Contribution #${idText}. The same SHA-256 is recorded in both environments. Copy the shared link for public verification.`)
+      const indexed = await registerVerifiedAnchor(idText, record, confirmed)
+      setMessage(`NATIVE ANCHOR VERIFIED for EVM Contribution #${idText}. The same SHA-256 is recorded in both environments. ${indexed.ok ? 'Native Anchor registered for public discovery in Explore Proofs.' : `Public indexing pending: ${indexed.error}. Keep the unified proof link and retry registration after verification.`}`)
     } catch (error) { setMessage(`Native publication failed or could not be confirmed: ${toError(error)}. If you approved a wallet transaction, check the native explorer before publishing again.`) }
     finally { if (unsubscribe) unsubscribe(); if (api) await api.disconnect().catch(() => {}); setBusy(false) }
   }
@@ -214,7 +230,8 @@ export default function UnifiedProofPanel({ account, walletKind }) {
       setVerified(valid)
       setPendingNative({ txHash: valid.txHash, blockHash: valid.blockHash, finalized: true })
       try { const previous = JSON.parse(localStorage.getItem(RECORD_KEY) || '{}'); previous[idText] = { txHash: valid.txHash, blockHash: valid.blockHash, finalized: true }; localStorage.setItem(RECORD_KEY, JSON.stringify(previous)) } catch { /* optional only */ }
-      setMessage(`UNIFIED VERIFIED: EVM metadata SHA-256 and Native remarkWithEvent match. EVM review status: ${statusName(record.status)}. Native signer: ${valid.signer}.`)
+      const indexed = await registerVerifiedAnchor(idText, record, valid)
+      setMessage(`UNIFIED VERIFIED: EVM metadata SHA-256 and Native remarkWithEvent match. EVM review status: ${statusName(record.status)}. Native signer: ${valid.signer}. ${indexed.ok ? 'Public discovery registered.' : `Public discovery not updated: ${indexed.error}. Verification itself remains valid.`}`)
     } catch (error) { setMessage(`Native proof did not verify: ${toError(error)}`) }
     finally { if (api) await api.disconnect().catch(() => {}); setBusy(false) }
   }
