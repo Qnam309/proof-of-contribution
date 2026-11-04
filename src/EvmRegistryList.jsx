@@ -32,6 +32,7 @@ export default function EvmRegistryList({ account, walletKind, mine = false, onV
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState('all')
   const [copyNotice, setCopyNotice] = useState('')
+  const [reasonMap, setReasonMap] = useState({})
   const [registryResults, setRegistryResults] = useState(null)
   const [registryProgress, setRegistryProgress] = useState({ checked: 0, total: 0, failed: 0 })
   const [registryRunning, setRegistryRunning] = useState(false)
@@ -161,6 +162,20 @@ export default function EvmRegistryList({ account, walletKind, mine = false, onV
       .some(value => String(value || '').toLowerCase().includes(needle))
   })
   const visibleRows = searchAllActive ? registryResults : displayed
+  useEffect(() => {
+    let canceled = false
+    const rejected = visibleRows.filter(row => !row.readError && Number(row.status) === 3)
+    for (const row of rejected) {
+      const id = String(row.id)
+      if (reasonMap[id]) continue
+      fetch(`/api/rejection-reason?id=${encodeURIComponent(id)}`, { cache: 'no-store' })
+        .then(async r => r.ok ? await r.json() : { missing: true })
+        .then(data => { if (!canceled) setReasonMap(prev => ({ ...prev, [id]: data })) })
+        .catch(() => { if (!canceled) setReasonMap(prev => ({ ...prev, [id]: { missing: true } })) })
+    }
+    return () => { canceled = true }
+  }, [rows, registryResults, metadataMap, statusFilter, search])
+
   async function shareRecord(row) {
     const url = new URL(window.location.origin + window.location.pathname)
     url.searchParams.set('contribution', String(row.id))
@@ -207,6 +222,11 @@ export default function EvmRegistryList({ account, walletKind, mine = false, onV
         {visibleRows.map(row => { const resolved = metadataMap[String(row.id)]; const external = row.evidenceURI?.startsWith('poc:ext:v1:'); const meta = resolved?.metadata || (external ? null : parseProofEvidence(row.evidenceURI)); return <article key={String(row.id)} className="ui-record">
           <div className="ui-record-head"><div><h3>{meta?.title || `Contribution #${String(row.id)}`}</h3><small>Contribution #{String(row.id)} · {meta?.category || 'Legacy proof'} · {short(row.contributor)}</small></div><strong>{statusName(row.status)}</strong></div>
           {meta?.description && <p>{meta?.description}</p>}
+          {Number(row.status) === 3 && reasonMap[String(row.id)]?.signed && <div className="poc-rejection-note" role="note">
+            <strong>Rejection reason</strong>
+            <p>{reasonMap[String(row.id)].reason}</p>
+            <small>Public off-chain note · signed by the on-chain rejecting reviewer ({short(reasonMap[String(row.id)].reviewer)}). Not stored in the contract.</small>
+          </div>}
           <p style={{ overflowWrap: 'anywhere' }}>Evidence: <a href={/^https?:\/\//i.test(meta?.evidenceUrl) ? meta?.evidenceUrl : '#'} target="_blank" rel="noopener noreferrer">{meta?.evidenceUrl || 'Invalid evidence metadata'}</a></p>
           {external && <p className="ui-help" role="status" style={{ color: resolved?.error ? '#f3acac' : '#83e6b6' }}>{resolved?.error ? `External metadata NOT VERIFIED: ${resolved.error}` : resolved?.metadata ? 'External metadata integrity: VERIFIED against on-chain SHA-256' : 'Checking external metadata integrity...'}</p>}
           <p className="ui-help" style={{ overflowWrap: 'anywhere' }}>Hash: {row.contentHash}<br/>Reviewer: {row.reviewer}<br/>Contributor: {row.contributor}</p>
