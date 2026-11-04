@@ -1,97 +1,129 @@
 # PoC Ledger — Proof of Contribution
 
-**One Action. One Proof. Verifiable on Portaldot V3.**
+**One action. One proof. Independently verifiable on Portaldot V3.**
 
-PoC Ledger is a Web3 application for recording, reviewing, and independently verifying community contributions. It combines an on-chain EVM contribution registry with external JSON metadata whose integrity is anchored by SHA-256.
+PoC Ledger is an open-source Web3 application for **submitting, reviewing, discovering, and verifying community contributions**. It combines a reviewer-controlled **EVM contribution registry** with optional **Portaldot Native proof anchoring**. Anyone can inspect a public contribution and independently check its blockchain evidence without connecting a wallet.
 
 Built for **Portaldot Hacker House 2026 — Track 4: Ecosystem DApps**.
 
 - **Live DApp:** https://pocledger.xyz/
-- **Source code:** https://github.com/Qnam309/proof-of-contribution
-- **Network:** Portaldot V3 Testnet (EVM chain ID `420420777`)
-- **Deployed ContributionRegistry:** `0x2719e83b13f737a4f3988b7e13ef028e93bb1cb2`
+- **GitHub:** https://github.com/Qnam309/proof-of-contribution
+- **Network:** Portaldot V3 Testnet — EVM chain ID `420420777`
+- **Deployed EVM contract (`ContributionRegistry`):** `0x2719e83b13f737a4f3988b7e13ef028e93bb1cb2`
+- **Live EVM verification example:** https://pocledger.xyz/?contribution=2
+- **Live unified verification example:** https://pocledger.xyz/?contribution=2&nativeTx=0xa69a10efa9d01c7490fb6f35b34138851d2f55e9a318daa78d1fa4bde826755b&nativeBlock=325447
 
-> **Status:** Deployed testnet MVP. The primary EVM submission, approval, and verification flow has been tested with a real contribution. This is not a mainnet production service.
+> **Project status:** Deployed **testnet MVP**, not a mainnet production service. The EVM review and verification flow, a real native anchor, and public EVM + Native verification have been demonstrated on Portaldot V3 Testnet.
 
-## The problem
+## Why this exists
 
-Open-source work, tutorials, translations, research, and community support are frequently documented in disconnected channels. Communities need a way to attribute a contribution, review it, and let others check that the published record matches what was registered.
+Community contributions such as tutorials, code, testing, translations, research, and support often remain scattered across social channels. A link or screenshot alone is difficult to track, review, and verify later.
 
-## How PoC Ledger works
+PoC Ledger provides a simple workflow: **submit evidence → review it → anchor an integrity hash → discover the record → independently verify and share it**.
+
+The design distinguishes **human review** from **cryptographic integrity**. Blockchain verification establishes that the checked data matches the recorded hashes and transactions; it does **not** prove the underlying work was performed or that two wallet addresses have the same owner.
+
+## Current capabilities
+
+| Module | Function |
+| --- | --- |
+| **Wallets** | MetaMask and OKX Wallet for EVM actions; Portaldot Wallet for optional native anchoring |
+| **Submit** | Upload contribution metadata (title, category, description, evidence URL) to Vercel Blob and register its URI and SHA-256 on EVM |
+| **Review** | Authorized on-chain reviewers approve or reject contributions; rejection feedback is available in the contributor experience |
+| **My Proofs / Explore Proofs** | View public EVM registry records, review status, evidence and integrity information |
+| **EVM Registry Verify** | Fetch metadata, recompute SHA-256, and check the deployed contract's verification result |
+| **Native Proof Verify** | Independently inspect a finalized native `system.remarkWithEvent` transaction and verify its proof hash; includes a real prefilled testnet example |
+| **Unified Proof** | Match an EVM contribution's metadata SHA-256 to an actual Portaldot Native anchor, including transaction inclusion and finalization checks |
+| **Public native anchor discovery** | Find indexed native anchor references through `/api/native-anchors`, and open or share a Unified Proof from Explore Proofs |
+| **Shareable verification** | Contribution-specific links open the relevant verifier and automatically run read-only checks |
+| **Admin** | On-chain reviewer authorization management; browser-tracked reviewer history is not a complete on-chain index |
+
+The Native Proof verifier and optional Native Anchor are **not** a separate, fully reviewed Native Submit registry. Independent contribution submission/review using a native-only wallet remains future work.
+
+## Architecture
 
 ```mermaid
 flowchart TD
-    A[Contributor connects EVM wallet] --> B[Enter title, category, description and evidence URL]
-    B --> C[Upload metadata JSON to Vercel Blob]
-    C --> D[Record metadata URI and SHA-256 on Portaldot V3]
-    D --> E[Authorized reviewer approves or rejects]
-    E --> F[Anyone verifies record and metadata integrity]
+    A[Contributor with MetaMask or OKX] --> B[Contribution metadata + evidence URL]
+    B --> C[Vercel Blob JSON]
+    C --> D[SHA-256 + metadata URI on EVM ContributionRegistry]
+    D --> E[Authorized on-chain review]
+    E --> F[Explore Proofs / EVM verification]
+    D --> G[Optional native anchor via Portaldot Wallet]
+    G --> H[Native system.remarkWithEvent]
+    H --> I[Public anchor discovery index]
+    I --> J[Unified Proof verification]
+    D --> J
+    J --> K[Shareable read-only verification URL]
 ```
 
-The EVM contract stores a reference to the off-chain metadata and a cryptographic commitment rather than the complete JSON description. Verification fetches that metadata, independently computes its hash, compares it to the on-chain record, and checks the contribution's approval status through the contract.
+### What is verified
 
-**Verification of a matching hash does not prove the underlying contribution is genuine or high quality**; that judgment remains part of the review process.
+**EVM Registry:** the verifier retrieves the registered metadata, computes the relevant hash, checks it against the value recorded in the EVM registry, and reads the contribution's review status. An **Approved** status represents an authorized review decision; it does not independently establish that evidence content is truthful.
 
-## Features
+**Native Proof:** the verifier checks a specified native extrinsic in a finalized block, its successful execution, and the expected `remarkWithEvent` proof hash.
 
-| Module | What it does |
+**Unified Proof:** after reading both records, the verifier compares the **same metadata SHA-256** on EVM and Native. The public anchor index supplies **discovery hints**, not trusted verification results. Users' browsers recheck the blockchain data when opening shared links.
+
+**Security boundary:** a matching hash is proof of consistency, **not** proof of a contribution's quality, originality, authorship, or ownership of both EVM and Native wallets. Native anchoring is optional and does not alter EVM review status.
+
+## Reproducible live example — Contribution #2
+
+| Field | Verified testnet example |
 | --- | --- |
-| Wallet connection | Connects MetaMask and OKX Wallet; requests switching to or adding Portaldot V3 Testnet when needed |
-| Submit | Records a contribution on the deployed EVM registry after uploading JSON metadata |
-| Review | Authorized reviewer wallets approve or reject pending submissions through on-chain transactions |
-| My Proofs / Explore | Reads EVM contribution records and their statuses from the testnet |
-| Verify — EVM Registry | Independently compares evidence SHA-256 and checks approved state using the EVM contract; read-only |
-| Verify — Native Proof | Separate flow for legacy/native Portaldot proof records |
-| Verify — Local Demo | Browser-based demonstration, not an on-chain attestation |
-| Admin Panel | Contract admin grants and revokes reviewer permissions; keeps a locally tracked history of previously seen reviewers |
-| Share | Provides links to inspect individual proofs |
+| Contribution | `#2` — **PoC Ledger Wallet Integration Testing** |
+| Category | Development |
+| Evidence URL | https://github.com/Qnam309/proof-of-contribution |
+| EVM review status | **Approved** |
+| Metadata SHA-256 | `0xabaec1d5aa5a84809f1efbfbfe880b4f0811ef38445688751e35523cab139ae1` |
+| Native block / extrinsic | **#325447 / #1**, finalized |
+| Native transaction | `0xa69a10efa9d01c7490fb6f35b34138851d2f55e9a318daa78d1fa4bde826755b` |
+| Native block hash | `0x7f50dd8583ac7ea4d48449626c3b95f88529dcdb80ff2235f4478f58ceb107a9` |
+| Native signer | `5FyMFb65KtEFXh9GGok5baHdLgxTVW4Bitr4oP2YJFqgNL3a` |
 
-**Important:** The Admin Panel's tracked reviewer list is **not** a complete chain-wide index of all authorized reviewers. Permissions are checked on-chain. The browser demo uses local data and must not be mistaken for the EVM registry.
+**Try it without a wallet:**
 
-## Verified V3 EVM test
+1. Open the [EVM verification link](https://pocledger.xyz/?contribution=2) to auto-load Contribution #2 and check the approved registry record and metadata integrity.
+2. Open the [Unified Proof link](https://pocledger.xyz/?contribution=2&nativeTx=0xa69a10efa9d01c7490fb6f35b34138851d2f55e9a318daa78d1fa4bde826755b&nativeBlock=325447) to check the EVM metadata hash against the finalized Native transaction.
+3. In the app, choose **Verify → Native Proof → Load Real Native Proof Example → Verify On-chain (free)** to inspect the native transaction independently.
+4. Choose **Explore Proofs → Contribution #2** to inspect the public registry entry and use **Copy Unified Proof link** or **Open Unified Verify**.
 
-A live end-to-end flow was tested with **Contribution #2**:
+Verification is read-only and does **not** spend tPOT. It requires the testnet RPC and external metadata endpoints to be reachable. Never repeat the native publish transaction just to verify this example.
 
-- **Title:** PoC Ledger Wallet Integration Testing
-- **Category:** Development
-- **Evidence:** https://github.com/Qnam309/proof-of-contribution
-- **Outcome:** Submitted → Approved by an authorized reviewer → independently Verified
-- **Verification result:** `VERIFIED: APPROVED ON-CHAIN`
-- **Metadata integrity:** SHA-256 of the fetched external JSON matched the stored on-chain hash
-- **Approval block:** `267296`
-- **Approval transaction:** `0x73c1b001158e5d7de095487ec7504b58d4c665a7fd7189fe6e3a34acce379d32`
+### Earlier native experiment
 
-To reproduce the read-only verification, open **Verify → EVM Registry**, enter Contribution ID `2`, and click **Verify EVM Record (free)**. This does not require a wallet or testnet tokens, but it does depend on the network/RPC being available.
+A separate earlier Native `system.remarkWithEvent` proof was tested at block **#137579**, extrinsic **#1**, transaction `0x8e84f3871cf90ec6c98d87842ee46f618f4b86c37bbaf38a16e48c658394b27d`. It is distinct from Contribution #2's newer cross-environment anchor.
 
-### Earlier native proof experiment
+## Native anchor discovery
 
-The earlier native path published and verified a proof using `system.remarkWithEvent` (block `137579`, extrinsic index `1`, transaction `0x8e84f3871cf90ec6c98d87842ee46f618f4b86c37bbaf38a16e48c658394b27d`). This is a **separate** flow from the current EVM `ContributionRegistry`, and should not be confused with the EVM Contribution #2.
+- After a native anchor is successfully verified, the app can register its public transaction reference through the serverless **`/api/native-anchors`** endpoint.
+- The index stores discovery data in **Vercel Blob**, making known anchors discoverable beyond one browser's `localStorage`.
+- **Explore Proofs** can display indexed native references and generate an EVM + Native verification link.
+- **Unified Proof always checks the two environments again**; an indexed record alone is never sufficient to label a proof verified.
 
-## Architecture and technology
+The tested public index includes Contribution #2. This is an MVP discovery mechanism, **not** a guarantee that every historical Native transaction has been indexed. Robust production-grade indexing, authorization/abuse protection and comprehensive chain scanning remain areas for further hardening.
+
+## Stack and deployed network
 
 - **Frontend:** React, Vite, JavaScript, CSS
-- **Blockchain:** Portaldot V3 Testnet, EVM smart contract `ContributionRegistry`
-- **Wallets:** MetaMask and OKX Wallet for EVM; Portaldot-compatible wallet for the separate native functionality
-- **Metadata:** Vercel Blob for JSON storage; SHA-256 for integrity checks
-- **Backend:** Vercel Serverless Functions, with wallet-authorization checks for uploads
-- **Rate limiting:** Upstash Redis in the opt-in community upload mode
+- **EVM:** Portaldot V3 Testnet `ContributionRegistry`
+- **Native:** Portaldot Native RPC, native wallet signing, `system.remarkWithEvent`
+- **Metadata and anchor discovery:** Vercel Blob, Vercel Serverless Functions
+- **Integrity:** SHA-256
 - **Hosting:** Vercel
+- **Optional community upload protections:** Upstash Redis, when the relevant upload mode is configured
 
-### EVM network
-
-| Field | Value |
+| EVM network field | Value |
 | --- | --- |
-| Network name | Portaldot V3 Testnet |
+| Name | Portaldot V3 Testnet |
 | Chain ID | `420420777` |
 | RPC | `https://test-evm-rpc-v3.portaldot.dev` |
-| Currency | POT (testnet tPOT) |
+| Testnet token | POT / tPOT |
 | Explorer | https://scanner-testnet-v3.portaldot.dev/ |
-
-Testnet outages or slow RPC responses can delay transaction confirmation and the loading of on-chain records.
 
 ## Run locally
 
-Requirements: Node.js, npm, and an EVM wallet extension for transaction-writing operations.
+Requirements: Node.js, npm, and Vercel CLI access to the project for API-backed workflows. Wallet extensions are required **only** when signing transactions.
 
 ```bash
 git clone https://github.com/Qnam309/proof-of-contribution.git
@@ -99,46 +131,43 @@ cd proof-of-contribution
 npm install
 ```
 
-For frontend-only development:
+For UI development:
 
 ```bash
 npm run dev
 ```
 
-For complete local testing, including the `/api` serverless endpoints used for metadata upload:
+For end-to-end testing with `/api` routes (metadata upload, rejection feedback, native anchor discovery):
 
 ```bash
 npx vercel dev
 ```
 
-Follow the local URL printed by the selected command. `npm run dev` alone does **not** provide the Vercel API endpoints required by the full Submit flow.
+On Windows PowerShell, use `npm.cmd` and `npx.cmd` if script execution policies prevent `npm`/`npx` from running. `npm run dev` by itself does not emulate Vercel serverless functions.
 
-### Server-side configuration
+### Environment configuration
 
-Use Vercel project environment variables (and the local development configuration pulled by Vercel CLI) for the required Blob/authentication settings. The upload API supports a restricted allowlist mode and an opt-in public/community mode. Consult [`UPLOAD_MODES.md`](./UPLOAD_MODES.md) for the exact settings and deployment precautions.
+Configure required server-side environment variables in the Vercel project. Blob-backed uploads and native-anchor persistence require the appropriate **`BLOB_READ_WRITE_TOKEN`** and linked Blob Store. Consult [`UPLOAD_MODES.md`](./UPLOAD_MODES.md) for upload-mode settings and safeguards.
 
-Never commit `.env.local`, `.vercel/`, private keys, Blob credentials, Redis credentials, or other secrets. Public/community upload requires server-side safeguards; **do not disable the allowlist without enabling and testing the configured protection**.
+**Never commit** `.env.local`, `.vercel/`, wallet private keys, signing secrets, Blob tokens or Redis credentials. Do not enable unrestricted public uploads without tested server-side abuse protection.
 
-## What costs testnet POT?
+### Transaction costs
 
-| Action | Requires tPOT? |
+| Operation | Testnet gas required? |
 | --- | --- |
-| Browse records, verify EVM proof | No |
-| Connect wallet | No |
-| Submit contribution | Yes — contributor wallet |
-| Approve or reject | Yes — authorized reviewer wallet |
-| Grant or revoke reviewer | Yes — contract admin wallet |
+| Browse, search, copy links, EVM Verify, Native Verify, Unified Verify | **No** |
+| Connect a wallet | **No** |
+| Submit EVM contribution | **Yes** — contributor EVM wallet |
+| Approve/reject or change reviewer access | **Yes** — authorized EVM wallet |
+| Publish optional Native Anchor | **Yes** — Portaldot native wallet |
+| Register/inspect an existing Native Anchor reference | **No blockchain transaction**; server API may have storage usage costs |
 
-Gas estimates shown before sending a transaction are not necessarily final fees. Check the wallet confirmation carefully. The native-wallet testnet token distribution process is separate from EVM wallet connection.
+## MVP limitations and next steps
 
-## Scope and roadmap
+This is a **testnet MVP**. Availability depends on Portaldot RPCs, wallet extensions, metadata hosting and Vercel services. The index is a discovery layer, not a trust oracle. Public upload protection, reviewer-management visibility, error handling and indexing scalability need additional testing before broad public deployment.
 
-**Implemented and tested:** EVM wallet connectivity, on-chain submissions, Vercel Blob metadata integrity checks, reviewer decisions, read-only verification, and on-chain reviewer administration.
-
-**Remaining work before broad public use:** Verify Production environment variables and community upload limits, review backend security and abuse protections, improve RPC outage handling, and run broader multi-wallet tests. Potential later improvements include contributor reputation, richer indexing, and sponsored gas for newcomers.
-
-The repository also contains testing utilities. These should not be treated as production payment/transfer services.
+Potential next steps include Native-only Submit/Review with explicit identity and authorization design, safer automated anchor indexing, searchable evidence URLs, richer contributor profiles and reputation signals.
 
 ---
 
-**Built for Portaldot Hacker House 2026.**
+**Built for Portaldot Hacker House 2026 — Ecosystem DApps.**
