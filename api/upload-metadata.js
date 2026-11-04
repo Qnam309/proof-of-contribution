@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { isAddress, verifyMessage } from 'viem'
-import { put, head } from '@vercel/blob'
+import { put, head, BlobNotFoundError } from '@vercel/blob'
 
 const CATEGORIES = ['Community', 'Education', 'Development', 'Content', 'Design', 'Other']
 const WINDOW_MS = 120000
@@ -8,55 +8,71 @@ const recent = new Map() // Best-effort only; instances do not share this map.
 const json = (res, code, body) => res.status(code).json(body)
 const sha256 = value => '0x' + createHash('sha256').update(value).digest('hex')
 
-// Public uploads use shared, atomic Redis counters.
-async function reservePublicUpload({ address, signature, req }) {
+// Public upload quota is reserved only when creating NEW JSON metadata.
+// A failed upload releases its reservation atomically. The v2 namespace
+// intentionally starts fresh after migrating away from the former v1 policy
+// which charged failed gas checks. Keep this prefix stable after deployment.
+async function redisEval(script, keys, args) {
   const url = process.env.UPSTASH_REDIS_REST_URL?.replace(/\/$/, '')
   const token = process.env.UPSTASH_REDIS_REST_TOKEN
-  if (!url || !token) return { status: 503, error: 'Public uploads are not configured. Set Upstash Redis REST credentials.' }
+  if (!url || !token) throw Error('Public uploads are not configured. Set Upstash Redis REST credentials.')
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(['EVAL', script, keys.length, ...keys, ...args]),
+    signal: AbortSignal.timeout(5000),
+  })
+  if (!response.ok) throw Error('Upload quota service rejected the request.')
+  const result = await response.json()
+  if (result.error || typeof result.result !== 'number') throw Error('Upload quota service returned an invalid response.')
+  return result.result
+}
 
+async function reservePublicUpload({ address, signature, req }) {
   const forwarded = req.headers['x-forwarded-for']
   const ip = (Array.isArray(forwarded) ? forwarded[0] : forwarded || '').split(',')[0].trim() || req.socket?.remoteAddress || 'unknown'
   const digest = value => createHash('sha256').update(value).digest('hex')
   const day = Math.floor(Date.now() / 86400000)
+  const sigDigest = digest(signature)
   const keys = [
-    `poc:v1:wallet:${day}:${address.toLowerCase()}`,
-    `poc:v1:ip:${day}:${digest(ip)}`,
-    `poc:v1:global:${day}`,
-    `poc:v1:sig:${digest(signature)}`,
+    `poc:v2:wallet:${day}:${address.toLowerCase()}`,
+    `poc:v2:ip:${day}:${digest(ip)}`,
+    `poc:v2:global:${day}`,
+    `poc:v2:sig:${sigDigest}`,
   ]
-  const script = `
+  const reserveScript = `
     if redis.call('EXISTS', KEYS[4]) == 1 then return 4 end
-    if tonumber(redis.call('GET', KEYS[1]) or '0') >= tonumber(ARGV[1]) then return 1 end
-    if tonumber(redis.call('GET', KEYS[2]) or '0') >= tonumber(ARGV[2]) then return 2 end
-    if tonumber(redis.call('GET', KEYS[3]) or '0') >= tonumber(ARGV[3]) then return 3 end
-    redis.call('SET', KEYS[4], '1', 'EX', 300)
+    for i = 1, 3 do
+      if tonumber(redis.call('GET', KEYS[i]) or '0') >= tonumber(ARGV[i]) then return i end
+    end
+    redis.call('SET', KEYS[4], ARGV[4], 'EX', 300)
     for i = 1, 3 do
       redis.call('INCR', KEYS[i])
       redis.call('EXPIRE', KEYS[i], 172800)
     end
     return 0
   `
+  const answer = await redisEval(reserveScript, keys, [3, 12, 100, sigDigest])
+  if (answer === 4) return { rejected: { status: 409, error: 'This wallet signature was already used. Check gas again.' } }
+  if (answer !== 0) return { rejected: { status: 429, error: 'Public upload quota reached (wallet: 3/day, network address: 12/day, community: 100/day). Try again tomorrow.' } }
 
-  let response
-  try {
-    response = await fetch(url, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify(['EVAL', script, 4, ...keys, 3, 12, 100]),
-      signal: AbortSignal.timeout(5000),
-    })
-  } catch {
-    return { status: 503, error: 'Upload quota service unavailable. Please try later.' }
+  let released = false
+  return {
+    release: async () => {
+      if (released) return
+      const releaseScript = `
+        if redis.call('GET', KEYS[4]) ~= ARGV[1] then return 0 end
+        redis.call('DEL', KEYS[4])
+        for i = 1, 3 do
+          local count = tonumber(redis.call('GET', KEYS[i]) or '0')
+          if count > 0 then redis.call('DECR', KEYS[i]) end
+        end
+        return 1
+      `
+      const result = await redisEval(releaseScript, keys, [sigDigest])
+      released = result === 1
+    },
   }
-  if (!response.ok) return { status: 503, error: 'Upload quota service rejected the request.' }
-  let result
-  try { result = await response.json() } catch {
-    return { status: 503, error: 'Invalid response from quota service.' }
-  }
-  if (result.error || typeof result.result !== 'number') return { status: 503, error: 'Upload quota service error.' }
-  if (result.result === 0) return null
-  if (result.result === 4) return { status: 409, error: 'This wallet signature was already used. Check gas again.' }
-  return { status: 429, error: 'Public upload quota reached (wallet: 3/day, network address: 12/day, community: 100/day). Try again tomorrow.' }
 }
 
 // Reuse an existing content-addressed Blob only after checking its exact bytes.
@@ -65,7 +81,7 @@ async function findExistingMetadata(pathname, exact, hash) {
   try {
     existing = await head(pathname)
   } catch (error) {
-    if (error?.name === 'BlobNotFoundError') return null
+    if (error instanceof BlobNotFoundError || error?.name === 'BlobNotFoundError' || /requested blob does not exist/i.test(error?.message || '')) return null
     throw error
   }
 
@@ -121,10 +137,7 @@ export default async function handler(req, res) {
     if (!(await verifyMessage({ address, message, signature }))) return json(res, 401, { error: 'Invalid wallet signature.' })
 
     const mode = (process.env.POC_UPLOAD_MODE || 'allowlist').trim().toLowerCase()
-    if (mode === 'public') {
-      const rejected = await reservePublicUpload({ address, signature, req })
-      if (rejected) return json(res, rejected.status, { error: rejected.error })
-    } else if (mode === 'allowlist') {
+    if (mode === 'allowlist') {
       const allowList = (process.env.POC_UPLOAD_ALLOWED_WALLETS || '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean)
       if (!allowList.length) return json(res, 503, { error: 'Configure POC_UPLOAD_ALLOWED_WALLETS before enabling uploads.' })
       if (!allowList.includes(address.toLowerCase())) return json(res, 403, { error: 'Wallet is not on the allowed uploader list.' })
@@ -134,30 +147,59 @@ export default async function handler(req, res) {
       attempts.push(now)
       recent.set(address.toLowerCase(), attempts)
       if (recent.size > 1000) recent.clear()
-    } else {
+    } else if (mode !== 'public') {
       return json(res, 503, { error: 'Invalid POC_UPLOAD_MODE. Use allowlist or public.' })
     }
 
-    // Immutable, content-addressed pathname. Never overwrite existing metadata.
+    // Identical metadata uses the same immutable content-addressed path.
+    // A successful authenticated reuse does NOT consume a public upload slot.
     const pathname = `poc/metadata/${hash.slice(2)}.json`
     let blob = await findExistingMetadata(pathname, exact, hash)
+    let reservation = null
+    let created = false
 
     if (!blob) {
-      try {
-        blob = await put(pathname, exact, {
-          access: 'public',
-          addRandomSuffix: false,
-          allowOverwrite: false,
-          contentType: 'application/json; charset=utf-8',
-        })
-      } catch (error) {
-        // Another request may have created the same Blob between head() and put().
-        if (error?.name === 'BlobAlreadyExistsError' || /blob already exists/i.test(error?.message || '')) {
-          blob = await findExistingMetadata(pathname, exact, hash)
-          if (!blob) throw error
-        } else {
-          throw error
+      if (mode === 'public') {
+        try {
+          reservation = await reservePublicUpload({ address, signature, req })
+        } catch {
+          return json(res, 503, { error: 'Upload quota service unavailable. Please try later.' })
         }
+        if (reservation.rejected) return json(res, reservation.rejected.status, { error: reservation.rejected.error })
+      }
+      try {
+        try {
+          blob = await put(pathname, exact, {
+            access: 'public',
+            addRandomSuffix: false,
+            allowOverwrite: false,
+            contentType: 'application/json; charset=utf-8',
+          })
+          created = true
+        } catch (error) {
+          // Concurrent request won: reuse only after checking the stored bytes.
+          if (error?.name === 'BlobAlreadyExistsError' || /blob already exists/i.test(error?.message || '')) {
+            blob = await findExistingMetadata(pathname, exact, hash)
+            if (!blob) throw error
+          } else {
+            throw error
+          }
+        }
+        const checkUrl = new URL(blob.url)
+        if (checkUrl.protocol !== 'https:' || !checkUrl.hostname.endsWith('.public.blob.vercel-storage.com')) {
+          throw Error('Unexpected Blob URL from upload.')
+        }
+      } catch (error) {
+        // Do not consume quota for a failed metadata upload.
+        // If Redis itself is unavailable, quotas might not be refunded: fail closed.
+        if (reservation?.release && !created) {
+          try { await reservation.release() } catch { /* quota service unavailable */ }
+        }
+        throw error
+      }
+      // A concurrent upload already created the same JSON; no new Blob was made.
+      if (!created && reservation?.release) {
+        try { await reservation.release() } catch { /* keep fail-closed quota if Redis unavailable */ }
       }
     }
 
